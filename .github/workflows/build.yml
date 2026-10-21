@@ -1,0 +1,78 @@
+# Сборка MineSync на серверах GitHub: Windows (.exe) и macOS (.app).
+#
+# Когда запускается:
+#   - при публикации версии (тег вида v1.0.1) — собирает и прикладывает zip к релизу;
+#   - вручную: Actions → Build → Run workflow (можно указать тег релиза, например v1.0.0).
+# Каждая машина сначала прогоняет все тесты, и только если они прошли — собирает программу.
+
+name: Build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Тег релиза, к которому приложить файлы (например v1.0.0). Пусто — только собрать."
+        required: false
+        default: ""
+
+permissions:
+  contents: write  # чтобы прикладывать файлы к релизу
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: Windows
+          - os: macos-14  # Apple Silicon
+            platform: macOS
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen  # окна в тестах не показываются
+      PYTHONUTF8: "1"  # Python везде работает с текстом в UTF-8 (на Windows по умолчанию cp1252)
+      TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Установить зависимости
+        run: python -m pip install -e ".[dev]"
+
+      - name: Тесты
+        run: python -m pytest -q
+
+      - name: Собрать программу
+        run: python packaging/build.py
+
+      - name: Упаковать (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = if ($env:TAG) { $env:TAG.TrimStart('v') } else { 'dev' }
+          Compress-Archive -Path dist/MineSync -DestinationPath "MineSync-$version-Windows.zip"
+
+      - name: Упаковать (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          version="${TAG#v}"; version="${version:-dev}"
+          ditto -c -k --keepParent dist/MineSync.app "MineSync-$version-macOS.zip"
+
+      - name: Сохранить сборку
+        uses: actions/upload-artifact@v4
+        with:
+          name: MineSync-${{ matrix.platform }}
+          path: MineSync-*-${{ matrix.platform }}.zip
+
+      - name: Приложить к релизу
+        if: env.TAG != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" MineSync-*-${{ matrix.platform }}.zip --clobber

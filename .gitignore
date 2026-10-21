@@ -1,0 +1,25 @@
+# Виртуальное окружение
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Сборка PyInstaller
+build/
+dist/
+
+# Тесты
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Системные файлы
+.DS_Store
+Thumbs.db
+
+# Редакторы
+.vscode/
+.idea/
