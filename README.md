@@ -17,12 +17,17 @@ You choose where you played last — the other computer becomes an exact copy of
   the worlds folder inside is found automatically.
 - **Instance links** — link an instance on this computer with one on the other computer once; both remember it.
 - **Fast sync** — only new and changed files are transferred; unchanged files are never rewritten.
+  Compressible data is sent compressed, and if Wi-Fi drops for a moment the transfer continues where it stopped.
+- **Knows where you played** — after each sync MineSync remembers the state of the world, so next time it
+  suggests the direction itself and warns you if the world was changed on both computers.
 - **Backups** — before every sync the old versions of replaced files are kept, and «Restore» undoes a sync.
   An optional full-world backup mode is available in Settings.
 - **Safe** — if the connection drops or the computer shuts down mid-sync, the world is rolled back to its previous state.
 - **Warnings** — e.g. when the world on the receiving computer is newer, or when it is open in the game
-  (syncing an open world is blocked).
+  (syncing an open world is blocked). If the world changes on the other computer during a transfer, nothing is replaced.
 - **Live status** — the list updates by itself after the game saves a world and when you enter or leave it.
+- **Updates** — on startup MineSync checks GitHub for a new version and offers to download it
+  (can be turned off in Settings).
 - **Extras** — world descriptions, game mode / hardcore / play time badges, sync history, «Recent» tab,
   English and Russian interface.
 
@@ -34,7 +39,7 @@ You choose where you played last — the other computer becomes an exact copy of
 3. **Instances**: add an instance folder with «+». MineSync finds the worlds folder inside.
 4. **Link instances** (once per instance): open the instance tab and choose which instance on the other
    computer to link it with.
-5. **Sync**: press «Sync» next to a world and answer where you played last.
+5. **Sync**: press «Sync» next to a world and confirm where you played last (MineSync suggests the answer).
 
 ![Sync dialog](docs/screenshots/sync_en.png)
 
@@ -71,6 +76,8 @@ pip install -e ".[dev]"
 
 python -m blocksync      # run from source
 python -m pytest         # tests
+ruff check src tests     # code style
+mypy                     # types
 ```
 
 The code and comments are in Russian; the interface is available in English and Russian
@@ -82,19 +89,21 @@ The code and comments are in Russian; the interface is available in English and 
   The code is never sent over the network — the SPAKE2 protocol is used.
 - All traffic goes over HTTPS; device certificates are exchanged during pairing and pinned.
 - Every request is also signed with the pair's shared key (HMAC-SHA256); requests from unpaired devices are rejected.
+- Every transferred file is checked with SHA-256.
+- The only connection outside your home network is the update check (a request to the GitHub API with the app version);
+  it can be turned off in Settings.
 
 ## Known limitations
 
 - Works within one local network. If you use a VPN, it must allow local network traffic («Bypass LAN»).
 - Exactly two computers can be paired.
-- Linux: supported in code but not tested on real Linux.
+- Linux: the tests run on Linux, but the app itself hasn't been tried on a real Linux desktop.
 - Undoing a sync with a «changes» backup restores only the files that sync touched; if you have played since,
   enable «Full world backup» in Settings.
 - The game doesn't save mobs' head rotation, so after a sync (just like after rejoining a world) mobs face
   the direction of their body.
 - The app is not signed with a developer certificate: a copy downloaded from the internet may need
   confirmation to open (macOS: right-click → Open; Windows: «More info» → «Run anyway»).
-- Network error messages are only in Russian for now.
 
 ## Resources and licenses
 
