@@ -14,7 +14,7 @@ from blocksync.config.instances import Instance, instance_from_saves, make_insta
 from blocksync.config.paths import AppPaths, default_saves_dir
 from blocksync.config.settings import PairedDevice, Settings, read_settings, save_settings
 from blocksync.core.backups import validate_keep
-from blocksync.core.staging import cleanup_leftovers
+from blocksync.core.staging import cleanup_leftovers, staging_root
 from blocksync.net.auth import RequestVerifier
 from blocksync.net.client import NetworkError, PeerClient
 from blocksync.net.discovery import Discovery, FoundDevice, PeerStatus, peer_status
@@ -216,7 +216,9 @@ class Node:
         # Сначала «замок»: вторая копия программы с той же папкой данных дальше не пойдёт.
         self._lock.acquire()
         try:
-            cleanup_leftovers(self.paths.tmp_dir)
+            # Остатки прерванных синхронизаций: в старом месте (папка данных) и рядом с мирами.
+            for tmp_root in [self.paths.tmp_dir, *(staging_root(i.saves_dir) for i in self.instances())]:
+                cleanup_leftovers(tmp_root)
             self.server.start()
         except BaseException:
             self._lock.release()

@@ -13,9 +13,9 @@ import pytest
 from blocksync.core.apply import FileSource, LocalFolderSource, SyncCancelled, SyncError, SyncResult, apply_sync
 from blocksync.core.backups import Backup, list_backups, restore_backup
 from blocksync.core.compare import SyncPlan, compare
-from blocksync.core.manifest import build_manifest
+from blocksync.core.manifest import FileEntry, build_manifest
 from blocksync.core.lock import WorldLockedError
-from helpers import BASE_TIME, hold_lock, make_world, read_world, write_file
+from helpers import BASE_TIME, hold_lock, make_world, read_world, write_file, leftovers
 
 WORLD_FILES = {
     "level.dat": b"level",
@@ -148,8 +148,8 @@ class BrokenSource:
     def __init__(self, world_dir: Path) -> None:
         self.world_dir = world_dir
 
-    def open_file(self, relative_path: str) -> BinaryIO:
-        return _BrokenReader((self.world_dir / relative_path).read_bytes())
+    def open_file(self, entry: FileEntry) -> BinaryIO:
+        return _BrokenReader((self.world_dir / entry.path).read_bytes())
 
 
 class _BrokenReader(io.BytesIO):
@@ -170,7 +170,7 @@ def test_broken_transfer_leaves_world_untouched(env: Env) -> None:
         env.sync(BrokenSource(env.source))
 
     assert read_world(env.target) == before
-    assert list(env.tmp.iterdir()) == []
+    assert leftovers(env.tmp) == []
     assert list_backups(env.backups, "World") == []
 
 
@@ -184,7 +184,7 @@ def test_size_mismatch_is_an_error(env: Env) -> None:
         apply_sync(plan, LocalFolderSource(env.source), env.target, env.tmp, env.backups, 3)
 
     assert not env.target.exists()
-    assert list(env.tmp.iterdir()) == []
+    assert leftovers(env.tmp) == []
 
 
 def test_cancel_leaves_world_untouched(env: Env) -> None:
@@ -198,7 +198,7 @@ def test_cancel_leaves_world_untouched(env: Env) -> None:
         )
 
     assert read_world(env.target) == {"level.dat": b"old"}
-    assert list(env.tmp.iterdir()) == []
+    assert leftovers(env.tmp) == []
 
 
 def test_progress_reaches_total(env: Env) -> None:

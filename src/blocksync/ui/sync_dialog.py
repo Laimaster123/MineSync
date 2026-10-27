@@ -26,6 +26,7 @@ from blocksync.config.history import Direction as HistoryDirection
 from blocksync.config.history import add_record, new_record
 from blocksync.core.apply import SyncResult
 from blocksync.core.checks import MASS_DELETE_THRESHOLD, SyncBlocker, SyncWarning
+from blocksync.core.staging import staging_root
 from blocksync.net.client import NetworkError, PeerClient
 from blocksync.net.node import Node
 from blocksync.net.pull import pull_world
@@ -133,7 +134,7 @@ class SyncDialog(Dialog):
 
         def work(task: Task) -> SyncPreview:
             with _peer_client(node, remote) as client:
-                return prepare_sync(client, world, direction, saves_dir, node.paths.tmp_dir,
+                return prepare_sync(client, world, direction, saves_dir, staging_root(saves_dir),
                                     node.settings.full_backup)
 
         # Если пользователь успел вернуться назад и выбрать заново, ответ старого
@@ -257,7 +258,7 @@ class SyncDialog(Dialog):
         def work(task: Task) -> SyncResult:
             with _peer_client(node, remote) as client:
                 result = pull_world(
-                    client, world, saves_dir, node.paths.tmp_dir, node.backups_root_for(local),
+                    client, world, saves_dir, staging_root(saves_dir), node.backups_root_for(local),
                     node.settings.keep_backups, task.report_progress, task.is_cancelled,
                     full_backup=node.settings.full_backup,
                 )

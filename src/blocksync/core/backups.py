@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from blocksync.core.lock import WorldLockedError, is_world_locked
-from blocksync.core.staging import create_staging_dir
+from blocksync.core.staging import create_staging_dir, discard_staging_dir
 from blocksync.core.swap import BACKUP_FILES, DELTA_NAME, JOURNAL_NAME, read_delta, swap_files
 
 logger = logging.getLogger(__name__)
@@ -114,10 +114,13 @@ def restore_backup(
     try:
         # Копируем, а не переносим: выбранный бэкап должен остаться.
         shutil.copytree(backup.path, staging, dirs_exist_ok=True)
-        return replace_world(staging, world_dir, backups_root, keep)
+        result = replace_world(staging, world_dir, backups_root, keep)
     except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
+        discard_staging_dir(staging)
         raise
+    # Временная папка уже стала миром; убираем только опустевшую папку для временных папок.
+    discard_staging_dir(staging)
+    return result
 
 
 def _restore_delta(
@@ -137,7 +140,7 @@ def _restore_delta(
         new_backup = new_backup_path(backups_root / world_dir.name)
         swap_files(world_dir, files, delta["restore_put"], delta["restore_remove"], new_backup, staging / JOURNAL_NAME)
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        discard_staging_dir(staging)
     prune_backups(backups_root, world_dir.name, keep)
     logger.info("Мир %s восстановлен из бэкапа изменений %s", world_dir, backup.path)
     return new_backup

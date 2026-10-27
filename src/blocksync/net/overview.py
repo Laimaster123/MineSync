@@ -148,7 +148,7 @@ def load_icons(rows: list[WorldRow], client: PeerClient | None) -> dict[str, byt
                 with open(row.local.icon_path, "rb") as file:
                     icons[row.folder_name] = file.read(MAX_ICON_BYTES)
             elif row.remote is not None and row.remote.has_icon and client is not None:
-                with client.open_file(row.folder_name, "icon.png") as stream:
+                with client.open_file(row.folder_name, "icon.png", retry=False) as stream:
                     icons[row.folder_name] = stream.read(MAX_ICON_BYTES)
         except (OSError, NetworkError) as error:
             # Без иконки список всё равно можно показать.

@@ -61,7 +61,7 @@ def prepare_sync(
 ) -> SyncPreview:
     """Сравнить мир на обоих устройствах и проверить предупреждения и блокировки."""
     if not is_safe_world_name(world):
-        raise NetworkError(f"неверное имя мира: {world!r}")
+        raise NetworkError(f"неверное имя мира: {world!r}", "net_bad_world")
     here = local_side(saves_dir / world)
     there = remote_side(client, world)
     if direction is Direction.PULL:
