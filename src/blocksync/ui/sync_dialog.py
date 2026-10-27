@@ -413,9 +413,12 @@ class SyncDialog(Dialog):
     def _fit_to_text(self) -> None:
         """Окно подрастает под длинный текст (переносы строк Qt сам по высоте не учитывает)."""
         page = self.pages.currentWidget()
-        page.layout().activate()
-        needed = page.layout().totalHeightForWidth(page.width()) if page.layout().hasHeightForWidth() else 0
-        margins = self.layout().contentsMargins()
+        page_layout, own_layout = page.layout() if page else None, self.layout()
+        if page is None or page_layout is None or own_layout is None:
+            return
+        page_layout.activate()
+        needed = page_layout.totalHeightForWidth(page.width()) if page_layout.hasHeightForWidth() else 0
+        margins = own_layout.contentsMargins()
         self.resize(self.width(), max(self.height(), needed + margins.top() + margins.bottom()))
 
     # --- Отмена и закрытие ---

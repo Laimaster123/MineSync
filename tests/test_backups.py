@@ -10,7 +10,8 @@ from blocksync.core.backups import (
     validate_keep,
 )
 from blocksync.core.staging import cleanup_leftovers, create_staging_dir
-from helpers import make_world, read_world, leftovers
+
+from helpers import leftovers, make_world, read_world
 
 
 @pytest.fixture

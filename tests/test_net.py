@@ -29,7 +29,8 @@ from blocksync.net.client import NetworkError, PeerClient, RemoteFileSource, Sou
 from blocksync.net.protocol import SyncRequest
 from blocksync.net.pull import pull_world
 from blocksync.net.server import RequestError, SyncServer
-from helpers import BASE_TIME, hold_lock, make_level_dat, make_world, read_world, write_file, leftovers
+
+from helpers import BASE_TIME, hold_lock, leftovers, make_level_dat, make_world, read_world, write_file
 
 KEY = b"0123456789abcdef0123456789abcdef"
 

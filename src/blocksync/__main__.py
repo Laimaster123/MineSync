@@ -5,9 +5,9 @@ import sys
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from blocksync.config.app_lock import AlreadyRunningError
 from blocksync.config.logs import setup_logging
 from blocksync.config.paths import AppPaths
-from blocksync.config.app_lock import AlreadyRunningError
 from blocksync.net.node import Node
 from blocksync.ui.main_window import MainWindow
 from blocksync.ui.strings import tr

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from blocksync.core.lock import is_world_locked
+
 from helpers import hold_lock, make_world
 
 

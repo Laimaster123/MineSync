@@ -5,15 +5,15 @@
 
 import logging
 import threading
-from dataclasses import replace
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from blocksync.config.app_lock import AppLock
 from blocksync.config.instances import Instance, instance_from_saves, make_instance
 from blocksync.config.paths import AppPaths, default_saves_dir
-from blocksync.config.sync_state import SyncStateStore
 from blocksync.config.settings import PairedDevice, Settings, read_settings, save_settings
+from blocksync.config.sync_state import SyncStateStore
 from blocksync.core.backups import validate_keep
 from blocksync.core.staging import cleanup_leftovers, staging_root
 from blocksync.net.auth import RequestVerifier

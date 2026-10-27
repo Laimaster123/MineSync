@@ -6,7 +6,17 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QPixmap
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMenu,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from blocksync.net.overview import WorldRow, WorldStatus
 from blocksync.ui.format import format_play_time, format_size, format_time
@@ -211,7 +221,7 @@ class WorldList(Panel):
 
     def __init__(self, actions: RowActions) -> None:
         super().__init__()
-        self.actions = actions
+        self.row_actions = actions
         self.rows: dict[str, WorldRowWidget] = {}
 
         header = QHBoxLayout()
@@ -232,7 +242,7 @@ class WorldList(Panel):
         self.rows_layout.setContentsMargins(6, 6, 6, 6)
         self.rows_layout.setSpacing(2)
         self.rows_layout.addStretch(1)  # свободное место — под строками, а не между ними
-        self.scroll = scroll = QScrollArea()
+        self.scroll_area = scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.rows_box)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -263,7 +273,7 @@ class WorldList(Panel):
     ) -> None:
         """icons_by_world, notes и synced (когда синхронизирован) — по ключу строки (WorldRow.key)."""
         # Строки пересоздаются — запоминаем прокрутку, чтобы список не прыгал.
-        bar = self.scroll.verticalScrollBar()
+        bar = self.scroll_area.verticalScrollBar()
         position = bar.value()
         synced = synced or {}
         for widget in self.rows.values():
@@ -274,7 +284,7 @@ class WorldList(Panel):
         self.rows = {}
         for index, row in enumerate(rows):
             widget = WorldRowWidget(
-                row, icons_by_world[row.key], notes.get(row.key), self.actions, show_instance, synced.get(row.key)
+                row, icons_by_world[row.key], notes.get(row.key), self.row_actions, show_instance, synced.get(row.key)
             )
             self.rows_layout.insertWidget(index, widget)
             self.rows[row.key] = widget

@@ -43,8 +43,8 @@ def swap_files(
              "put": put, "remove": remove, "existed": existed}
     _write_json(journal, state)
     try:
-        for path, real in existed.items():
-            _move(world_dir / real, backup_dir / BACKUP_FILES / path)
+        for path, real_name in existed.items():
+            _move(world_dir / real_name, backup_dir / BACKUP_FILES / path)
         for path in put:
             _move(new_files_dir / path, world_dir / path)
         _remove_empty_dirs(world_dir, remove)

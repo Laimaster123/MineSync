@@ -16,20 +16,21 @@ from pytestqt.qtbot import QtBot
 
 from blocksync.config.history import Direction, SyncRecord, add_record, load_history
 from blocksync.core.backups import list_backups
-from blocksync.net.node import Node
 from blocksync.net import updates
+from blocksync.net.node import Node
 from blocksync.net.overview import WorldStatus
 from blocksync.net.updates import Release
 from blocksync.resources import resource_path
 from blocksync.ui.backups_dialog import BackupsDialog, load_all_backups
-from blocksync.ui.history_dialog import HistoryDialog
 from blocksync.ui.format import format_count, format_duration, format_play_time, format_size
+from blocksync.ui.history_dialog import HistoryDialog
 from blocksync.ui.main_window import MainWindow
 from blocksync.ui.pairing_dialog import PairingDialog
 from blocksync.ui.settings_dialog import SettingsDialog
 from blocksync.ui.sync_dialog import SyncDialog
 from blocksync.ui.update_dialog import UpdateDialog
 from blocksync.ui.worker import NodeBridge
+
 from helpers import BASE_TIME, hold_lock, make_level_dat, make_world, read_world, write_file
 from test_discovery import wait_until
 from test_instances import make_prism_instance
@@ -514,7 +515,7 @@ def test_rows_sorted_by_last_sync_and_scroll_kept(devices: tuple[Device, Device]
     # Сначала недавно синхронизированные, потом остальные — от свежих к старым.
     wait_for_rows(qtbot, window, lambda rows: [r.folder_name for r in rows][:3] == ["Мир 07", "Мир 03", "Мир 11"])
 
-    bar = window.world_list.scroll.verticalScrollBar()
+    bar = window.world_list.scroll_area.verticalScrollBar()
     qtbot.waitUntil(lambda: bar.maximum() > 0, timeout=TIMEOUT_MS)
     bar.setValue(bar.maximum() // 2)
     position = bar.value()

@@ -13,9 +13,10 @@ import pytest
 from blocksync.core.apply import FileSource, LocalFolderSource, SyncCancelled, SyncError, SyncResult, apply_sync
 from blocksync.core.backups import Backup, list_backups, restore_backup
 from blocksync.core.compare import SyncPlan, compare
-from blocksync.core.manifest import FileEntry, build_manifest
 from blocksync.core.lock import WorldLockedError
-from helpers import BASE_TIME, hold_lock, make_world, read_world, write_file, leftovers
+from blocksync.core.manifest import FileEntry, build_manifest
+
+from helpers import BASE_TIME, hold_lock, leftovers, make_world, read_world, write_file
 
 WORLD_FILES = {
     "level.dat": b"level",

@@ -33,7 +33,7 @@ def ensure_certificate(tls_dir: Path, device_id: str) -> tuple[Path, Path]:
     tls_dir.mkdir(parents=True, exist_ok=True)
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"MineSync {device_id}")])
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     cert = (
         x509.CertificateBuilder()
         .subject_name(name)

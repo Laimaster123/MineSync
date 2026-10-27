@@ -10,6 +10,7 @@ from pytestqt.qtbot import QtBot
 from blocksync.config.settings import load_settings
 from blocksync.net.updates import Release, check_for_update, is_newer, parse_version, release_from_json
 from blocksync.ui.update_dialog import UpdateDialog
+
 from test_node import make_node
 
 RELEASE = {

@@ -5,14 +5,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+from spake2 import SPAKE2_A
 
 from blocksync.config.settings import PairedDevice
 from blocksync.net.auth import RequestVerifier
 from blocksync.net.client import PeerClient
-from spake2 import SPAKE2_A
-
 from blocksync.net.pairing import (
-    CODE_LIFETIME_SECONDS, MAX_ATTEMPTS, MAX_PENDING, PairingError, PairingHost, pair_with,
+    CODE_LIFETIME_SECONDS,
+    MAX_ATTEMPTS,
+    MAX_PENDING,
+    PairingError,
+    PairingHost,
+    pair_with,
 )
 from blocksync.net.server import SyncServer
 from blocksync.net.tls import client_context, ensure_certificate, server_context

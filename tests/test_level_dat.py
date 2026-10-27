@@ -6,6 +6,7 @@ import pytest
 
 from blocksync.core.level_dat import LevelDatError, read_level_info
 from blocksync.core.nbt import NbtError, parse_nbt
+
 from helpers import make_level_dat, nbt_string
 
 

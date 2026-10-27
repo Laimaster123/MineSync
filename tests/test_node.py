@@ -5,11 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from blocksync.config.app_lock import AlreadyRunningError
 from blocksync.config.paths import AppPaths
 from blocksync.config.settings import load_settings, save_settings
-from blocksync.config.app_lock import AlreadyRunningError
 from blocksync.net.discovery import PeerStatus
 from blocksync.net.node import Node
+
 from helpers import make_level_dat, make_world
 from test_discovery import wait_until
 

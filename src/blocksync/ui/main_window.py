@@ -23,11 +23,11 @@ from blocksync import __version__
 from blocksync.config.history import SyncRecord, last_synced, load_history
 from blocksync.config.instances import Instance, InstanceError, InstanceProblem
 from blocksync.core.world import list_worlds
+from blocksync.net import updates
 from blocksync.net.client import NetworkError
 from blocksync.net.discovery import PeerStatus
 from blocksync.net.node import Node
 from blocksync.net.overview import WorldRow, build_overview, load_icons
-from blocksync.net import updates
 from blocksync.net.protocol import RemoteInstance, SyncRequest
 from blocksync.net.updates import Release
 from blocksync.ui import icons
@@ -41,8 +41,8 @@ from blocksync.ui.pairing_dialog import PairingDialog
 from blocksync.ui.settings_dialog import SettingsDialog
 from blocksync.ui.strings import LANGUAGES, current_language, set_language, tr
 from blocksync.ui.sync_dialog import SyncDialog
-from blocksync.ui.update_dialog import UpdateDialog
 from blocksync.ui.theme import Colors, rgba
+from blocksync.ui.update_dialog import UpdateDialog
 from blocksync.ui.widgets import (
     AchievementToast,
     Background,
@@ -55,8 +55,8 @@ from blocksync.ui.widgets import (
     with_icon,
     world_icon_from_png,
 )
-from blocksync.ui.world_list import ICON_SIZE, RowActions, WorldList
 from blocksync.ui.worker import NodeBridge, Task, run_task
+from blocksync.ui.world_list import ICON_SIZE, RowActions, WorldList
 
 logger = logging.getLogger(__name__)
 
@@ -430,8 +430,12 @@ class MainWindow(QMainWindow):
         run_task(
             lambda task: node.link_instance(instance_id, peer_instance),
             on_done=lambda _: self.refresh(),
-            on_error=lambda error: (self._show_message([describe_error(error)]), self.refresh()),
+            on_error=self._link_failed,
         )
+
+    def _link_failed(self, error: BaseException) -> None:
+        self._show_message([describe_error(error)])
+        self.refresh()
 
     def _show_folder_menu(self, button: QPushButton) -> None:
         menu = QMenu(self)

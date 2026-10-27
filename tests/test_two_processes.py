@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from blocksync.net.client import PeerClient
+
 from helpers import make_level_dat, make_world, read_world
 
 

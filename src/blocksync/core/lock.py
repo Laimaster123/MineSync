@@ -32,35 +32,41 @@ def is_world_locked(world_dir: Path) -> bool:
     return _is_locked_posix(lock_file)
 
 
-def _is_locked_posix(lock_file: Path) -> bool:
-    """macOS и Linux: блокировка через fcntl (её же использует Java, на которой написан Minecraft)."""
-    import fcntl
+# fcntl нет на Windows, msvcrt есть только на Windows: каждая функция определена только там,
+# где работает (так и проверка типов на любой системе пропускает чужую функцию).
+if sys.platform != "win32":
 
-    # Открываем только для чтения: так файл точно не изменится.
-    # Разделяемая блокировка (LOCK_SH) конфликтует с исключительной блокировкой игры.
-    with open(lock_file, "rb") as file:
+    def _is_locked_posix(lock_file: Path) -> bool:
+        """macOS и Linux: блокировка через fcntl (её же использует Java, на которой написан Minecraft)."""
+        import fcntl
+
+        # Открываем только для чтения: так файл точно не изменится.
+        # Разделяемая блокировка (LOCK_SH) конфликтует с исключительной блокировкой игры.
+        with open(lock_file, "rb") as file:
+            try:
+                fcntl.lockf(file, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except OSError:
+                return True
+            fcntl.lockf(file, fcntl.LOCK_UN)
+            return False
+
+
+else:
+
+    def _is_locked_windows(lock_file: Path) -> bool:
+        """Windows: пробуем заблокировать первый байт файла через msvcrt."""
+        import msvcrt
+
         try:
-            fcntl.lockf(file, fcntl.LOCK_SH | fcntl.LOCK_NB)
-        except OSError:
+            file = open(lock_file, "rb")
+        except PermissionError:
+            # Файл нельзя даже открыть: его держит игра.
             return True
-        fcntl.lockf(file, fcntl.LOCK_UN)
-        return False
-
-
-def _is_locked_windows(lock_file: Path) -> bool:
-    """Windows: пробуем заблокировать первый байт файла через msvcrt."""
-    import msvcrt
-
-    try:
-        file = open(lock_file, "rb")
-    except PermissionError:
-        # Файл нельзя даже открыть: его держит игра.
-        return True
-    with file:
-        try:
-            msvcrt.locking(file.fileno(), msvcrt.LK_NBRLCK, 1)
-        except OSError:
-            return True
-        file.seek(0)
-        msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 1)
-        return False
+        with file:
+            try:
+                msvcrt.locking(file.fileno(), msvcrt.LK_NBRLCK, 1)
+            except OSError:
+                return True
+            file.seek(0)
+            msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 1)
+            return False

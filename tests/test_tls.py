@@ -11,6 +11,7 @@ from blocksync.net.auth import RequestVerifier
 from blocksync.net.client import NetworkError, PeerClient
 from blocksync.net.server import SyncServer
 from blocksync.net.tls import client_context, ensure_certificate, fingerprint, server_context
+
 from helpers import make_level_dat, make_world
 
 KEY = b"k" * 32

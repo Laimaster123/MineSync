@@ -12,7 +12,8 @@ from blocksync.core.backups import list_backups, restore_backup
 from blocksync.core.compare import compare
 from blocksync.core.manifest import build_manifest
 from blocksync.core.staging import cleanup_leftovers, create_staging_dir
-from helpers import BASE_TIME, make_world, read_world, write_file, leftovers
+
+from helpers import BASE_TIME, leftovers, make_world, read_world, write_file
 
 BIG = b"x" * 200_000
 
