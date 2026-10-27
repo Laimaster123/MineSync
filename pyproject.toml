@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "blocksync"
-version = "1.0.0"
+version = "1.1.0"
 description = "Синхронизация миров Minecraft Java Edition между двумя компьютерами (Windows, macOS) по локальной сети"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -23,6 +23,8 @@ dev = [
     "pytest-qt>=4.4",
     "pyinstaller>=6.11",
     "pillow>=10.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
 ]
 
 [project.scripts]
@@ -37,3 +39,32 @@ blocksync = ["resources/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 130
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Обычные ошибки (E, F), порядок импортов (I), устаревшие приёмы Python (UP), частые ловушки (B).
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# В тестах длинные строки с ожидаемыми данными читаются лучше целиком.
+"tests/*" = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["blocksync"]
+# Помощники тестов импортируются как обычные модули (tests/helpers.py и т.п.).
+known-local-folder = ["helpers", "test_discovery", "test_instances", "test_node"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+check_untyped_defs = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+# У этой библиотеки нет описаний типов.
+module = ["spake2"]
+ignore_missing_imports = true

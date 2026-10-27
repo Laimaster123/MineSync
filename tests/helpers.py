@@ -120,3 +120,8 @@ def hold_lock(lock_file: Path) -> Iterator[None]:
         yield
     finally:
         holder.communicate(timeout=10)  # закрывает ввод, процесс завершается
+
+
+def leftovers(folder: Path) -> list[Path]:
+    """Что осталось в папке для временных папок (опустевшую папку программа удаляет сама)."""
+    return sorted(folder.iterdir()) if folder.exists() else []

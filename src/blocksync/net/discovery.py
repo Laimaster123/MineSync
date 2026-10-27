@@ -55,10 +55,6 @@ class FoundDevice:
         return f"https://{self.address}:{self.port}"
 
 
-class AlreadyRunningError(Exception):
-    """В сети уже объявлено устройство с таким же ID: MineSync запущен второй раз."""
-
-
 class PeerStatus(Enum):
     NOT_PAIRED = "not_paired"  # пары нет
     ONLINE = "online"  # сопряжено, устройство в сети
@@ -142,6 +138,7 @@ class Discovery:
             self._zeroconf.register_service(self._info)
         except NonUniqueNameException:
             # Запасная проверка: устройство с таким ID уже объявлено в сети (основная — AppLock).
+            # Класс ошибки тот же, что у AppLock, чтобы окно запуска показало понятное сообщение.
             self._zeroconf.close()
             self._zeroconf = None
             raise AlreadyRunningError("MineSync уже запущен на этом компьютере") from None

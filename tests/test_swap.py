@@ -12,7 +12,8 @@ from blocksync.core.backups import list_backups, restore_backup
 from blocksync.core.compare import compare
 from blocksync.core.manifest import build_manifest
 from blocksync.core.staging import cleanup_leftovers, create_staging_dir
-from helpers import BASE_TIME, make_world, read_world, write_file
+
+from helpers import BASE_TIME, leftovers, make_world, read_world, write_file
 
 BIG = b"x" * 200_000
 
@@ -44,7 +45,7 @@ def test_unchanged_files_are_not_copied(folders: dict[str, Path]) -> None:
     [backup] = list_backups(folders["backups"], "World")
     assert backup.is_delta
     assert read_world(backup.path / "files") == {"level.dat": b"old", "data/лишний.dat": b"x"}
-    assert list(folders["tmp"].iterdir()) == []
+    assert leftovers(folders["tmp"]) == []
 
 
 def test_restore_delta_backup_and_undo(folders: dict[str, Path]) -> None:
@@ -86,7 +87,7 @@ def test_failure_in_the_middle_is_rolled_back(folders: dict[str, Path], monkeypa
 
     assert read_world(folders["target"]) == before
     assert list_backups(folders["backups"], "World") == []
-    assert list(folders["tmp"].iterdir()) == []
+    assert leftovers(folders["tmp"]) == []
 
 
 def test_interrupted_swap_is_recovered_on_next_start(folders: dict[str, Path]) -> None:

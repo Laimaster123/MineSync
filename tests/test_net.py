@@ -5,27 +5,32 @@
 """
 
 import os
+import socket
 import sys
 import threading
 import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import BinaryIO
 
 import httpx
 import pytest
 
+from blocksync.config.sync_state import SyncState
 from blocksync.core.compare import compare
 from blocksync.core.lock import WorldLockedError
-from blocksync.core.manifest import build_manifest
+from blocksync.core.manifest import FileEntry, build_manifest
+from blocksync.core.staging import staging_root
 from blocksync.net import server as server_module
 from blocksync.net.auth import RequestVerifier
-from blocksync.net.client import NetworkError, PeerClient
+from blocksync.net.client import NetworkError, PeerClient, RemoteFileSource, SourceChangedError
 from blocksync.net.protocol import SyncRequest
 from blocksync.net.pull import pull_world
 from blocksync.net.server import RequestError, SyncServer
-from helpers import BASE_TIME, hold_lock, make_level_dat, make_world, read_world, write_file
+
+from helpers import BASE_TIME, hold_lock, leftovers, make_level_dat, make_world, read_world, write_file
 
 KEY = b"0123456789abcdef0123456789abcdef"
 
@@ -130,7 +135,7 @@ def test_broken_connection_leaves_world_untouched(
         devices.pull("Мой мир")
 
     assert read_world(mac_world) == before
-    assert list(devices.mac_tmp.iterdir()) == []
+    assert leftovers(devices.mac_tmp) == []
 
 
 def test_sync_request_calls_handler(devices: Devices) -> None:
@@ -251,3 +256,149 @@ def test_server_rejects_symlink_outside_world(devices: Devices) -> None:
     os.symlink(secret, devices.pc_saves / "Мой мир" / "link.dat")
     with pytest.raises(RequestError):
         devices.server.world_file("Мой мир", "link.dat")
+
+
+@pytest.mark.parametrize("length", ["-1", "abc"])
+def test_bad_content_length_is_rejected(devices: Devices, length: str) -> None:
+    """Неверная длина тела — сразу ошибка 400, а не чтение «до конца соединения»."""
+    with socket.create_connection(("127.0.0.1", devices.server.port), timeout=5) as connection:
+        connection.sendall(f"POST /api/v1/pair/start HTTP/1.1\r\nHost: x\r\nContent-Length: {length}\r\n\r\n".encode())
+        connection.sendall(b"A" * 100_000)
+        assert connection.recv(64).startswith(b"HTTP/1.1 400")
+
+
+def test_silent_connection_is_closed(devices: Devices, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Соединение, по которому ничего не присылают, сервер закрывает сам."""
+    monkeypatch.setattr(server_module._Handler, "timeout", 0.3)
+    with socket.create_connection(("127.0.0.1", devices.server.port), timeout=5) as connection:
+        assert connection.recv(64) == b""  # сервер закрыл соединение
+
+
+# --- Передача файлов: сжатие, докачка, проверка, что источник не менялся ---
+
+
+def _record_ranges(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
+    """Запоминать заголовок Range каждого запроса файла."""
+    ranges: list[str | None] = []
+    original = server_module._Handler._send_file
+
+    def send_file(handler: server_module._Handler, path: Path) -> None:
+        ranges.append(handler.headers.get("Range"))
+        original(handler, path)
+
+    monkeypatch.setattr(server_module._Handler, "_send_file", send_file)
+    return ranges
+
+
+def _crash_first_big_transfer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Первая передача большого файла обрывается на середине (как при пропаже Wi-Fi)."""
+    original = server_module._Handler._copy_file
+    crashed: list[bool] = []
+
+    def copy_file(handler: server_module._Handler, file: BinaryIO, size: int) -> None:
+        if crashed or size < 1_000_000:
+            original(handler, file, size)
+            return
+        crashed.append(True)
+        original(handler, file, size // 2)
+        raise ConnectionResetError("связь пропала посреди передачи")
+
+    monkeypatch.setattr(server_module._Handler, "_copy_file", copy_file)
+
+
+def test_compressible_data_is_sent_compressed(devices: Devices, tmp_path: Path) -> None:
+    content = b"minecraft " * 500_000  # 5 МБ, хорошо сжимается
+    write_file(devices.pc_saves / "Мой мир" / "stats/big.json", content)
+    source = RemoteFileSource(devices.client, "Мой мир")
+
+    with source.open_file(FileEntry("stats/big.json", len(content), BASE_TIME * 10**9)) as stream:
+        assert stream.read() == content
+
+    assert source.wire_bytes < len(content) / 10
+
+
+def test_pull_reports_bytes_transferred(devices: Devices) -> None:
+    result = pull_world(devices.client, "Мой мир", devices.mac_saves, devices.mac_tmp, devices.mac_backups, 3)
+    assert read_world(devices.mac_saves / "Мой мир") == read_world(devices.pc_saves / "Мой мир")
+    assert result.bytes_transferred is not None and 0 < result.bytes_transferred < result.bytes_copied
+
+
+def test_interrupted_transfer_resumes_from_same_place(devices: Devices, monkeypatch: pytest.MonkeyPatch) -> None:
+    _crash_first_big_transfer(monkeypatch)
+    ranges = _record_ranges(monkeypatch)
+
+    devices.pull("Мой мир")
+
+    assert read_world(devices.mac_saves / "Мой мир") == read_world(devices.pc_saves / "Мой мир")
+    resumed = [r for r in ranges if r is not None]
+    assert len(resumed) == 1 and resumed[0].startswith("bytes=") and resumed[0] != "bytes=0-"
+
+
+def test_resume_works_with_old_version_on_other_computer(devices: Devices, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Версия 1.0 не знает ни кадров, ни Range: файл приходит целиком с начала, лишнее пропускаем."""
+    monkeypatch.setattr(server_module, "TRANSFER_FRAMES", "unknown")
+    monkeypatch.setattr(server_module, "_range_start", lambda header, size: 0)
+    _crash_first_big_transfer(monkeypatch)
+
+    devices.pull("Мой мир")
+
+    assert read_world(devices.mac_saves / "Мой мир") == read_world(devices.pc_saves / "Мой мир")
+
+
+def test_file_changed_since_manifest_is_rejected(devices: Devices) -> None:
+    entry = devices.client.get_manifest("Мой мир").manifest["region/r.0.0.mca"]
+    write_file(devices.pc_saves / "Мой мир" / "region/r.0.0.mca", b"new", mtime=BASE_TIME + 50)
+
+    with pytest.raises(SourceChangedError):
+        devices.client.open_file("Мой мир", entry.path, entry)
+
+
+def test_file_changed_while_sending_is_rejected(devices: Devices, monkeypatch: pytest.MonkeyPatch) -> None:
+    original = server_module._Handler._copy_file
+    region = devices.pc_saves / "Мой мир" / "region/r.0.0.mca"
+
+    def copy_and_touch(handler: server_module._Handler, file: BinaryIO, size: int) -> None:
+        original(handler, file, size)
+        if size > 1_000_000:
+            os.utime(region, (BASE_TIME + 60, BASE_TIME + 60))  # игра сохранила файл, пока он передавался
+
+    monkeypatch.setattr(server_module._Handler, "_copy_file", copy_and_touch)
+
+    with pytest.raises(SourceChangedError):
+        devices.pull("Мой мир")
+    assert not (devices.mac_saves / "Мой мир").exists()
+
+
+def test_world_changed_during_pull_is_not_applied(devices: Devices, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Во время передачи на том компьютере появился новый файл: скачанное в мир не ставится."""
+    devices.pull("Мой мир")
+    write_file(devices.pc_saves / "Мой мир" / "icon.png", b"new icon", mtime=BASE_TIME + 100)
+    before = read_world(devices.mac_saves / "Мой мир")
+    original = server_module._Handler._send_file
+
+    def send_and_add(handler: server_module._Handler, path: Path) -> None:
+        original(handler, path)
+        write_file(devices.pc_saves / "Мой мир" / "region/r.1.0.mca", b"new region")
+
+    monkeypatch.setattr(server_module._Handler, "_send_file", send_and_add)
+
+    with pytest.raises(SourceChangedError):
+        devices.pull("Мой мир")
+    assert read_world(devices.mac_saves / "Мой мир") == before
+
+
+def test_staging_is_next_to_worlds_and_removed(devices: Devices) -> None:
+    tmp = staging_root(devices.mac_saves)
+    pull_world(devices.client, "Мой мир", devices.mac_saves, tmp, devices.mac_backups, 3)
+    assert not tmp.exists()
+    assert [p.name for p in devices.mac_saves.iterdir()] == ["Мой мир"]
+
+
+def test_sync_state_is_shared_with_other_computer(devices: Devices) -> None:
+    """Подсказку можно дать и на компьютере, который мир отдавал: он спрашивает состояние у получателя."""
+    assert devices.client.get_sync_state("Мой мир") is None  # сервер его не знает
+    saved = SyncState(datetime(2026, 10, 20, 18, 0), {"a": FileEntry("a", 1, 5)})
+    devices.server.sync_state = lambda instance, world: saved if (instance, world) == (None, "Мой мир") else None
+
+    assert devices.client.get_sync_state("Мой мир") == saved
+    assert devices.client.get_sync_state("Другой мир") is None

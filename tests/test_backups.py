@@ -10,7 +10,8 @@ from blocksync.core.backups import (
     validate_keep,
 )
 from blocksync.core.staging import cleanup_leftovers, create_staging_dir
-from helpers import make_world, read_world
+
+from helpers import leftovers, make_world, read_world
 
 
 @pytest.fixture
@@ -75,7 +76,7 @@ def test_restore_returns_previous_state_and_saves_current(dirs: dict[str, Path],
     assert read_world(world) == {"level.dat": b"old", "region/a": b"1"}
     assert saved_current is not None and read_world(saved_current) == {"level.dat": b"new"}
     assert old_backup.path.exists()  # выбранный бэкап остался
-    assert list(dirs["tmp"].iterdir()) == []  # временных папок не осталось
+    assert leftovers(dirs["tmp"]) == []  # временных папок не осталось
 
 
 @pytest.mark.parametrize("keep", [1, 11])
@@ -90,4 +91,4 @@ def test_cleanup_leftovers_removes_only_staging_dirs(dirs: dict[str, Path]) -> N
     other = make_world(dirs["tmp"] / "other", {"x": b"x"})
 
     assert cleanup_leftovers(dirs["tmp"]) == 2
-    assert list(dirs["tmp"].iterdir()) == [other]
+    assert leftovers(dirs["tmp"]) == [other]

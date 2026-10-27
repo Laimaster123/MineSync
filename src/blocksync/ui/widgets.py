@@ -393,6 +393,8 @@ class AchievementToast(QFrame):
         self.text.setText(text)
         self.adjustSize()
         parent = self.parentWidget()
+        if parent is None:
+            return
         y = self.MARGIN
         self._animation.stop()
         self._animation.setStartValue(QPoint(parent.width(), y))
@@ -405,9 +407,12 @@ class AchievementToast(QFrame):
         self._hide_timer.start(self.SHOW_MS)
 
     def _slide_out(self) -> None:
+        parent = self.parentWidget()
+        if parent is None:
+            return
         self._animation.stop()
         self._animation.setStartValue(self.pos())
-        self._animation.setEndValue(QPoint(self.parentWidget().width(), self.y()))
+        self._animation.setEndValue(QPoint(parent.width(), self.y()))
         self._leaving = True
         self._animation.start()
 

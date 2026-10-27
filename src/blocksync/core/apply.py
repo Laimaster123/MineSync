@@ -11,7 +11,6 @@
 
 import logging
 import os
-import shutil
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -22,7 +21,7 @@ from blocksync.core.backups import new_backup_path, prune_backups, replace_world
 from blocksync.core.compare import SyncPlan
 from blocksync.core.lock import WorldLockedError, is_world_locked
 from blocksync.core.manifest import FileEntry, find_on_disk
-from blocksync.core.staging import create_staging_dir
+from blocksync.core.staging import create_staging_dir, discard_staging_dir
 from blocksync.core.swap import JOURNAL_NAME, swap_files
 
 logger = logging.getLogger(__name__)
@@ -41,7 +40,7 @@ class FileSource(Protocol):
     (net/client.RemoteFileSource) — код синхронизации одинаков для обоих.
     """
 
-    def open_file(self, relative_path: str) -> BinaryIO: ...
+    def open_file(self, entry: FileEntry) -> BinaryIO: ...
 
 
 class LocalFolderSource:
@@ -50,12 +49,20 @@ class LocalFolderSource:
     def __init__(self, world_dir: Path) -> None:
         self.world_dir = world_dir
 
-    def open_file(self, relative_path: str) -> BinaryIO:
-        return open(find_on_disk(self.world_dir, relative_path), "rb")
+    def open_file(self, entry: FileEntry) -> BinaryIO:
+        return open(find_on_disk(self.world_dir, entry.path), "rb")
 
 
 class SyncError(Exception):
-    """Синхронизация не удалась, мир оставлен как был."""
+    """Синхронизация не удалась, мир оставлен как был.
+
+    code и params — для текста на языке интерфейса (как у net.client.NetworkError).
+    """
+
+    def __init__(self, message: str, code: str | None = None, **params: object) -> None:
+        super().__init__(message)
+        self.code = code
+        self.params = params
 
 
 class SyncCancelled(Exception):
@@ -69,6 +76,7 @@ class SyncResult:
     bytes_copied: int
     backup_path: Path | None  # где лежит прежняя версия мира
     duration_seconds: float
+    bytes_transferred: int | None = None  # сколько пришло по сети (меньше bytes_copied, если сжато)
 
 
 def apply_sync(
@@ -81,8 +89,13 @@ def apply_sync(
     progress: ProgressCallback | None = None,
     should_cancel: Callable[[], bool] | None = None,
     full_backup: bool = False,
+    before_replace: Callable[[], None] | None = None,
 ) -> SyncResult:
-    """Сделать мир получателя (world_dir) копией эталона по готовому плану."""
+    """Сделать мир получателя (world_dir) копией эталона по готовому плану.
+
+    before_replace вызывается, когда все файлы скачаны, но мир ещё не тронут:
+    последняя возможность отказаться (например, если эталон изменился за время передачи).
+    """
     started = time.monotonic()
     if not plan.has_changes:
         return SyncResult(0, 0, 0, None, 0.0)
@@ -100,11 +113,18 @@ def apply_sync(
                 copier.copy(local, entry, staging)
             for entry in plan.to_copy:
                 copier.copy(source, entry, staging)
+            if before_replace is not None:
+                before_replace()
+            # Пока файлы копировались, мир могли открыть в игре.
+            if is_world_locked(world_dir):
+                raise WorldLockedError(world_dir)
             backup_path = replace_world(staging, world_dir, backups_root, keep_backups)
         else:
             new_files = staging / "files"
             for entry in plan.to_copy:
                 copier.copy(source, entry, new_files)
+            if before_replace is not None:
+                before_replace()
             # Пока файлы скачивались, мир могли открыть в игре.
             if is_world_locked(world_dir):
                 raise WorldLockedError(world_dir)
@@ -116,9 +136,9 @@ def apply_sync(
             prune_backups(backups_root, world_dir.name, keep_backups)
     except BaseException:
         # BaseException ловит и отмену, и Ctrl+C: временную папку убираем в любом случае.
-        shutil.rmtree(staging, ignore_errors=True)
+        discard_staging_dir(staging)
         raise
-    shutil.rmtree(staging, ignore_errors=True)
+    discard_staging_dir(staging)
 
     result = SyncResult(
         copied_files=len(plan.to_copy),
@@ -150,7 +170,7 @@ class _Copier:
         destination = staging / entry.path
         destination.parent.mkdir(parents=True, exist_ok=True)
         written = 0
-        with source.open_file(entry.path) as reader, open(destination, "wb") as writer:
+        with source.open_file(entry) as reader, open(destination, "wb") as writer:
             # Читаем по куску, пока read() не вернёт пустые байты (конец файла).
             while chunk := reader.read(CHUNK_SIZE):
                 if self.should_cancel is not None and self.should_cancel():
@@ -162,7 +182,8 @@ class _Copier:
                     self.progress(self.done, self.total)
         if written != entry.size:
             raise SyncError(
-                f"размер файла {entry.path} не совпал: ожидалось {entry.size}, получено {written}"
+                f"размер файла {entry.path} не совпал: ожидалось {entry.size}, получено {written}",
+                "sync_size_mismatch", path=entry.path,
             )
         # Время изменения как у эталона, чтобы следующее сравнение не нашло лишних различий.
         os.utime(destination, ns=(entry.mtime_ns, entry.mtime_ns))

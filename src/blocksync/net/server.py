@@ -5,12 +5,14 @@
 отдавать несколько файлов.
 """
 
+import hashlib
 import json
 import logging
 import os
 import re
 import ssl
 import threading
+import zlib
 from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +20,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from blocksync.config.sync_state import SyncState, state_to_json
 from blocksync.core.apply import CHUNK_SIZE
 from blocksync.core.level_dat import LevelDatError, read_level_info
 from blocksync.core.lock import is_world_locked
@@ -27,14 +30,23 @@ from blocksync.net.auth import AuthError, RequestVerifier
 from blocksync.net.pairing import PairingError, PairingHost
 from blocksync.net.protocol import (
     CHANGED_PATH,
+    FRAME_END,
+    FRAME_FLAG_CHANGED,
+    FRAME_HEADER,
+    FRAME_RAW,
+    FRAME_ZLIB,
+    HEADER_EXPECT,
+    HEADER_TRANSFER,
     INSTANCE_LINKS_PATH,
     INSTANCES_PATH,
     PAIR_CONFIRM_PATH,
     PAIR_START_PATH,
     SYNC_REQUESTS_PATH,
+    TRANSFER_FRAMES,
     UNPAIR_PATH,
     WORLDS_PATH,
     SyncRequest,
+    expect_header,
     manifest_to_json,
     world_to_json,
 )
@@ -44,14 +56,32 @@ logger = logging.getLogger(__name__)
 # Самый большой допустимый размер тела запроса (у нас только короткий JSON).
 MAX_BODY_BYTES = 64 * 1024
 
+# Сколько ждать данных от клиента (секунды). Без этого соединение, которое
+# открыли и молчат, навсегда заняло бы поток сервера.
+SOCKET_TIMEOUT_SECONDS = 60
+
 # Регулярные выражения для разбора адреса: (?P<world>...) — именованная часть.
 _MANIFEST_RE = re.compile(rf"^{WORLDS_PATH}/(?P<world>[^/]+)/manifest$")
+_SYNC_STATE_RE = re.compile(rf"^{WORLDS_PATH}/(?P<world>[^/]+)/sync-state$")
 _FILE_RE = re.compile(rf"^{WORLDS_PATH}/(?P<world>[^/]+)/files/(?P<path>.+)$")
+# Поддерживаем только «с байта N до конца» — этого хватает для докачки.
+_RANGE_RE = re.compile(r"^bytes=(?P<start>\d+)-$")
+
+# Сжатие при передаче: быстрый уровень zlib, чтобы процессор не стал узким местом.
+# Кусок отправляется сжатым, только если сжатие заметно уменьшило его, а если
+# несколько кусков подряд не сжались, остаток файла не сжимаем (не тратим процессор).
+COMPRESSION_LEVEL = 1
+MIN_COMPRESSION_RATIO = 0.9
+MAX_INCOMPRESSIBLE_CHUNKS = 2
+# Файлы, которые уже сжаты: их даже не пробуем сжимать (level.dat и data/*.dat — это gzip).
+INCOMPRESSIBLE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gz", ".zip", ".jar", ".dat", ".dat_old"})
 
 # Функция, которую сервер вызывает на просьбу «забери мир»: (ID устройства, просьба).
 SyncRequestHandler = Callable[[str, SyncRequest], None]
 # Сообщение о связи сборок: (ID устройства, наша сборка, сборка того устройства или None).
 InstanceLinkHandler = Callable[[str, str, str | None], None]
+# Состояние мира после последней синхронизации: (сборка или None, папка мира) -> состояние или None.
+SyncStateProvider = Callable[[str | None, str], SyncState | None]
 
 
 class RequestError(Exception):
@@ -73,6 +103,7 @@ class SyncServer:
     world_notes: описания миров, которые видит второе устройство ({папка: текст}).
     instances: список сборок [(ID, название)]; resolve_instance: папка saves сборки по ID.
     on_instance_link: второе устройство сообщило о связи сборок.
+    sync_state: каким был мир после последней синхронизации (для подсказки направления).
     """
 
     def __init__(
@@ -90,8 +121,10 @@ class SyncServer:
         resolve_instance: Callable[[str], Path | None] | None = None,
         on_instance_link: InstanceLinkHandler | None = None,
         on_peer_changed: Callable[[str], None] | None = None,
+        sync_state: SyncStateProvider | None = None,
     ) -> None:
         self.saves_dir = saves_dir
+        self.sync_state = sync_state
         self.world_notes = world_notes
         self.instances = instances
         self.resolve_instance = resolve_instance
@@ -183,6 +216,11 @@ class _Handler(BaseHTTPRequestHandler):
 
     server: _HttpServer
     protocol_version = "HTTP/1.1"
+    timeout = SOCKET_TIMEOUT_SECONDS
+    # Как отдаётся текущий файл (см. _send_file).
+    _framed = False
+    _compress = False
+    _sent_hash = hashlib.sha256()
 
     def do_GET(self) -> None:
         self._handle("GET")
@@ -205,17 +243,29 @@ class _Handler(BaseHTTPRequestHandler):
             device_id = app.verifier.verify(method, self.path, self.headers, body)
             if method == "GET":
                 instance = parse_qs(urlsplit(self.path).query).get("instance", [None])[0]
-                self._route_get(app, path, app.saves_for(instance))
+                if match := _SYNC_STATE_RE.match(path):
+                    self._send_sync_state(app, instance, match["world"])
+                else:
+                    self._route_get(app, path, app.saves_for(instance))
             else:
                 self._route_post(app, path, device_id, body)
         except AuthError as error:
             logger.warning("Отклонён запрос от %s: %s", self.address_string(), error)
             self._send_json(HTTPStatus.UNAUTHORIZED, {"error": str(error)})
-        except (RequestError, PairingError) as error:
+        except PairingError as error:
+            self._send_json(error.status, error.to_json())
+        except RequestError as error:
             self._send_json(error.status, {"error": str(error)})
 
     def _read_body(self) -> bytes:
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if length < 0:
+            # read(-1) читал бы до закрытия соединения — сколько угодно данных.
+            self.close_connection = True
+            raise RequestError(HTTPStatus.BAD_REQUEST, "неверная длина запроса")
         if length > MAX_BODY_BYTES:
             # Тело не прочитано, поэтому это соединение дальше использовать нельзя.
             self.close_connection = True
@@ -284,6 +334,14 @@ class _Handler(BaseHTTPRequestHandler):
         app.on_sync_request(device_id, SyncRequest(world, instance, target))
         self._send_json(HTTPStatus.ACCEPTED, {"status": "accepted"})
 
+    def _send_sync_state(self, app: SyncServer, instance: str | None, world: str) -> None:
+        if not is_safe_world_name(world):
+            raise RequestError(HTTPStatus.BAD_REQUEST, "неверное имя мира")
+        state = app.sync_state(instance, world) if app.sync_state is not None else None
+        if state is None:
+            raise RequestError(HTTPStatus.NOT_FOUND, "мир ещё не синхронизировался")
+        self._send_json(HTTPStatus.OK, state_to_json(state))
+
     def _send_manifest(self, world_dir: Path) -> None:
         try:
             data_version = read_level_info(world_dir / LEVEL_DAT_NAME).data_version
@@ -293,23 +351,63 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(HTTPStatus.OK, payload)
 
     def _send_file(self, path: Path) -> None:
+        """Отдать файл: целиком или с места обрыва (Range), кадрами со сжатием или как есть."""
+        framed = self.headers.get(HEADER_TRANSFER) == TRANSFER_FRAMES
         with open(path, "rb") as file:
-            size = os.fstat(file.fileno()).st_size
-            self.send_response(HTTPStatus.OK)
+            stat = os.fstat(file.fileno())
+            size = stat.st_size
+            expected = self.headers.get(HEADER_EXPECT)
+            if expected is not None and expected != expect_header(size, stat.st_mtime_ns):
+                raise RequestError(HTTPStatus.CONFLICT, "файл изменился после того, как был составлен список файлов")
+            start = _range_start(self.headers.get("Range"), size)
+            file.seek(start)
+            self.send_response(HTTPStatus.PARTIAL_CONTENT if start else HTTPStatus.OK)
             self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Length", str(size))
+            if start:
+                self.send_header("Content-Range", f"bytes {start}-{size - 1}/{size}")
+            if framed:
+                # Размер сжатых данных заранее неизвестен: отправляем частями (chunked).
+                self.send_header(HEADER_TRANSFER, TRANSFER_FRAMES)
+                self.send_header("Transfer-Encoding", "chunked")
+            else:
+                self.send_header("Content-Length", str(size - start))
+            self._framed = framed
+            self._compress = framed and path.suffix.lower() not in INCOMPRESSIBLE_SUFFIXES
             self.end_headers()
-            self._copy_file(file, size)
+            self._copy_file(file, size - start)
+            if framed:
+                after = os.stat(path)
+                changed = (after.st_size, after.st_mtime_ns) != (size, stat.st_mtime_ns)
+                self._write_frame(FRAME_END, self._sent_hash.digest() + bytes([FRAME_FLAG_CHANGED if changed else 0]))
+                self.wfile.write(b"0\r\n\r\n")  # конец ответа chunked
 
     def _copy_file(self, file: BinaryIO, size: int) -> None:
-        """Отправить файл кусками, не загружая его в память целиком."""
+        """Отправить size байт файла кусками, не загружая его в память целиком."""
+        self._sent_hash = hashlib.sha256()
         remaining = size
+        incompressible = 0  # сколько кусков подряд не сжалось
         while remaining > 0:
             chunk = file.read(min(CHUNK_SIZE, remaining))
             if not chunk:
                 break
-            self.wfile.write(chunk)
             remaining -= len(chunk)
+            if not self._framed:
+                self.wfile.write(chunk)
+                continue
+            self._sent_hash.update(chunk)
+            if self._compress and incompressible < MAX_INCOMPRESSIBLE_CHUNKS:
+                packed = zlib.compress(chunk, COMPRESSION_LEVEL)
+                if len(packed) <= len(chunk) * MIN_COMPRESSION_RATIO:
+                    incompressible = 0
+                    self._write_frame(FRAME_ZLIB, packed)
+                    continue
+                incompressible += 1
+            self._write_frame(FRAME_RAW, chunk)
+
+    def _write_frame(self, kind: int, payload: bytes) -> None:
+        """Один кадр — одна часть ответа chunked: «длина в hex», данные, перевод строки."""
+        frame = FRAME_HEADER.pack(kind, len(payload)) + payload
+        self.wfile.write(b"%x\r\n%b\r\n" % (len(frame), frame))
 
     def _send_json(self, status: HTTPStatus, data: dict[str, Any]) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -318,6 +416,19 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+
+def _range_start(header: str | None, size: int) -> int:
+    """С какого байта отдавать файл по заголовку «Range: bytes=N-» (без заголовка — с начала)."""
+    if header is None:
+        return 0
+    match = _RANGE_RE.match(header.strip())
+    if match is None:
+        raise RequestError(HTTPStatus.BAD_REQUEST, "неверный заголовок Range")
+    start = int(match["start"])
+    if start > size:
+        raise RequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "файл короче, чем запрошено")
+    return start
 
 
 def _parse_json(body: bytes) -> dict[str, Any]:

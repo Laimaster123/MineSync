@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from blocksync.config.paths import AppPaths, default_saves_dir, migrate_data_dir
-from blocksync.config.settings import PairedDevice, load_settings, save_settings
+from blocksync.config.settings import PairedDevice, load_settings, read_settings, save_settings
 
 
 def test_first_load_creates_settings_with_new_id(tmp_path: Path) -> None:
@@ -68,3 +68,15 @@ def test_old_data_dir_is_migrated(tmp_path: Path) -> None:
     assert (new / "settings.json").read_text() == "{}"
     assert (new / "backups" / "Мир").is_dir()
     migrate_data_dir(old, new)  # повторный вызов ничего не ломает
+
+
+def test_broken_settings_are_set_aside(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text("{ это не JSON", encoding="utf-8")
+
+    settings, broken = read_settings(path)
+
+    assert broken == tmp_path / "settings.broken.json"
+    assert broken.read_text(encoding="utf-8") == "{ это не JSON"
+    assert len(settings.device_id) == 32
+    assert load_settings(path) == settings  # новые настройки сохранены

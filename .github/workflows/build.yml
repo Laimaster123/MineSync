@@ -1,7 +1,8 @@
 # Сборка MineSync на серверах GitHub: Windows (.exe) и macOS (.app).
 #
 # Когда запускается:
-#   - при публикации версии (тег вида v1.0.1) — собирает и прикладывает zip к релизу;
+#   - при публикации версии (тег вида v1.0.1) — собирает и прикладывает zip к релизу
+#     (если релиза с этим тегом ещё нет, создаёт его с описанием из docs/releases/<тег>.md);
 #   - вручную: Actions → Build → Run workflow (можно указать тег релиза, например v1.0.0).
 # Каждая машина сначала прогоняет все тесты, и только если они прошли — собирает программу.
 
@@ -75,4 +76,15 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$TAG" MineSync-*-${{ matrix.platform }}.zip --clobber
+        run: |
+          # Если выпуска с этим тегом ещё нет — создать его (описание из docs/releases/<тег>.md).
+          # Обе машины могут дойти сюда одновременно: вторая просто увидит готовый выпуск.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            notes="docs/releases/$TAG.md"
+            if [ -f "$notes" ]; then
+              gh release create "$TAG" --title "MineSync ${TAG#v}" --notes-file "$notes" || true
+            else
+              gh release create "$TAG" --title "MineSync ${TAG#v}" --generate-notes || true
+            fi
+          fi
+          gh release upload "$TAG" MineSync-*-${{ matrix.platform }}.zip --clobber

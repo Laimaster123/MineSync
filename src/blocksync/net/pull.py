@@ -1,6 +1,7 @@
 """Забрать мир с другого устройства: манифест -> сравнение -> проверки -> применение."""
 
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from blocksync.core.apply import ProgressCallback, SyncResult, apply_sync
@@ -9,7 +10,7 @@ from blocksync.core.compare import compare
 from blocksync.core.lock import WorldLockedError, is_world_locked
 from blocksync.core.manifest import build_manifest
 from blocksync.core.world import is_safe_world_name, read_data_version
-from blocksync.net.client import NetworkError, PeerClient, RemoteFileSource
+from blocksync.net.client import NetworkError, PeerClient, RemoteFileSource, SourceChangedError
 
 
 def pull_world(
@@ -30,7 +31,7 @@ def pull_world(
     и на диске хватает места.
     """
     if not is_safe_world_name(world):
-        raise NetworkError(f"неверное имя мира: {world!r}")
+        raise NetworkError(f"неверное имя мира: {world!r}", "net_bad_world")
     remote = client.get_manifest(world)
     if remote.is_locked:
         raise WorldLockedError(Path(world))
@@ -45,7 +46,19 @@ def pull_world(
     )
     if SyncBlocker.NOT_ENOUGH_SPACE in check.blockers:
         raise NotEnoughSpaceError(check.required_bytes, check.free_bytes)
-    source = RemoteFileSource(client, world)
-    return apply_sync(
-        plan, source, world_dir, tmp_root, backups_root, keep_backups, progress, should_cancel, full_backup
+    source = RemoteFileSource(client, world, should_cancel)
+
+    def check_source_unchanged() -> None:
+        """Пока файлы шли по сети, мир на том устройстве могли открыть в игре или изменить.
+        Тогда скачанные файлы — из разных моментов, ставить их в мир нельзя."""
+        fresh = client.get_manifest(world)
+        if fresh.is_locked:
+            raise WorldLockedError(Path(world))
+        if compare(fresh.manifest, remote.manifest).has_changes:
+            raise SourceChangedError("список файлов изменился")
+
+    result = apply_sync(
+        plan, source, world_dir, tmp_root, backups_root, keep_backups, progress, should_cancel, full_backup,
+        before_replace=check_source_unchanged,
     )
+    return replace(result, bytes_transferred=source.wire_bytes) if result.copied_files else result

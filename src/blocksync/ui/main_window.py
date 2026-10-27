@@ -23,11 +23,13 @@ from blocksync import __version__
 from blocksync.config.history import SyncRecord, last_synced, load_history
 from blocksync.config.instances import Instance, InstanceError, InstanceProblem
 from blocksync.core.world import list_worlds
+from blocksync.net import updates
 from blocksync.net.client import NetworkError
 from blocksync.net.discovery import PeerStatus
 from blocksync.net.node import Node
 from blocksync.net.overview import WorldRow, build_overview, load_icons
 from blocksync.net.protocol import RemoteInstance, SyncRequest
+from blocksync.net.updates import Release
 from blocksync.ui import icons
 from blocksync.ui.backups_dialog import BackupsDialog
 from blocksync.ui.change_watcher import WorldWatcher
@@ -40,6 +42,7 @@ from blocksync.ui.settings_dialog import SettingsDialog
 from blocksync.ui.strings import LANGUAGES, current_language, set_language, tr
 from blocksync.ui.sync_dialog import SyncDialog
 from blocksync.ui.theme import Colors, rgba
+from blocksync.ui.update_dialog import UpdateDialog
 from blocksync.ui.widgets import (
     AchievementToast,
     Background,
@@ -52,8 +55,8 @@ from blocksync.ui.widgets import (
     with_icon,
     world_icon_from_png,
 )
-from blocksync.ui.world_list import ICON_SIZE, RowActions, WorldList
 from blocksync.ui.worker import NodeBridge, Task, run_task
+from blocksync.ui.world_list import ICON_SIZE, RowActions, WorldList
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +65,8 @@ logger = logging.getLogger(__name__)
 REFRESH_DELAY_MS = 300
 # Сколько миров показывать на вкладке «Недавние».
 RECENT_LIMIT = 8
+# Проверять обновления чуть позже запуска, чтобы не мешать первому обновлению списка (мс).
+UPDATE_CHECK_DELAY_MS = 3000
 
 INSTANCE_PROBLEM_KEYS = {
     InstanceProblem.NOT_A_FOLDER: "instances.error_not_a_folder",
@@ -81,11 +86,13 @@ class View:
     rows: list[WorldRow] = field(default_factory=list)
     icons: dict[str, bytes] = field(default_factory=dict)  # по WorldRow.key
     saves_missing: bool = False
-    peer_error: str | None = None
+    peer_error: NetworkError | None = None
     synced: dict[str, datetime] = field(default_factory=dict)  # когда мир синхронизирован, по WorldRow.key
 
 
-def _instance_rows(node: Node, instance: Instance) -> tuple[list[WorldRow], dict[str, bytes], bool, str | None]:
+def _instance_rows(
+    node: Node, instance: Instance
+) -> tuple[list[WorldRow], dict[str, bytes], bool, NetworkError | None]:
     """Миры одной сборки, сравнённые со связанной сборкой второго устройства."""
     remote = node.linked_instance(instance.id)
     client = node.peer_client(remote) if remote is not None else None
@@ -157,6 +164,7 @@ class MainWindow(QMainWindow):
         self._refresh_task: Task | None = None
         self._refresh_again = False
         self.sync_dialog: SyncDialog | None = None
+        self.pending_update: Release | None = None  # новая версия, о которой скажем после синхронизации
 
         set_language(node.settings.language)
         self.setWindowTitle("MineSync")
@@ -175,6 +183,11 @@ class MainWindow(QMainWindow):
         self.watcher.changed.connect(self._on_worlds_changed)
 
         self.refresh()
+        if node.settings.check_updates:
+            self._update_timer = QTimer(self)
+            self._update_timer.setSingleShot(True)
+            self._update_timer.timeout.connect(self.check_updates)
+            self._update_timer.start(UPDATE_CHECK_DELAY_MS)
 
     # --- Построение окна ---
 
@@ -316,7 +329,7 @@ class MainWindow(QMainWindow):
         elif not view.rows:
             messages.append(tr("main.no_worlds"))
         if view.peer_error:
-            messages.append(tr("main.peer_error", error=view.peer_error))
+            messages.append(tr("main.peer_error", error=describe_error(view.peer_error)))
         self._show_message(messages)
         self._update_sync_button()
         self._watch(view)
@@ -417,8 +430,12 @@ class MainWindow(QMainWindow):
         run_task(
             lambda task: node.link_instance(instance_id, peer_instance),
             on_done=lambda _: self.refresh(),
-            on_error=lambda error: (self._show_message([describe_error(error)]), self.refresh()),
+            on_error=self._link_failed,
         )
+
+    def _link_failed(self, error: BaseException) -> None:
+        self._show_message([describe_error(error)])
+        self.refresh()
 
     def _show_folder_menu(self, button: QPushButton) -> None:
         menu = QMenu(self)
@@ -562,6 +579,23 @@ class MainWindow(QMainWindow):
         self.watcher.paused = False
         self._update_sync_button()
         self._on_worlds_changed()
+        if self.pending_update is not None:
+            release, self.pending_update = self.pending_update, None
+            self._offer_update(release)
+
+    # --- Обновления программы ---
+
+    def check_updates(self) -> None:
+        """Спросить GitHub, нет ли новой версии (в фоне); если есть — предложить обновиться."""
+        run_task(lambda task: updates.check_for_update(__version__), on_done=self._offer_update)
+
+    def _offer_update(self, release: Release | None) -> None:
+        if release is None or release.version == self.node.settings.skipped_version:
+            return
+        if self.sync_dialog is not None:
+            self.pending_update = release  # не перебиваем синхронизацию: покажем после неё
+            return
+        UpdateDialog(self.node, release, parent=self).open()
 
     # --- Окна ---
 

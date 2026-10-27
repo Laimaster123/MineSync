@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from blocksync.core.manifest import build_manifest, newest_mtime_ns, normalize_path, total_size
+
 from helpers import BASE_TIME, make_world, write_file
 
 

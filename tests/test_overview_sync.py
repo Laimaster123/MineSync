@@ -14,6 +14,7 @@ from blocksync.net.overview import WorldStatus, build_overview, load_icons
 from blocksync.net.pull import pull_world
 from blocksync.net.server import SyncServer
 from blocksync.net.sync import Direction, prepare_sync
+
 from helpers import BASE_TIME, hold_lock, make_level_dat, make_world, write_file
 
 KEY = b"k" * 32

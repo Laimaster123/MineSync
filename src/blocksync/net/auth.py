@@ -13,7 +13,8 @@ import hmac
 import secrets
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
+from typing import Protocol
 from urllib.parse import unquote
 
 from blocksync.net.protocol import (
@@ -26,6 +27,12 @@ from blocksync.net.protocol import (
 # Запрос старше этого считается недействительным. Часы устройств могут немного
 # расходиться, поэтому окно не слишком маленькое.
 MAX_REQUEST_AGE_SECONDS = 5 * 60
+
+
+class Headers(Protocol):
+    """Заголовки запроса: словарь или http.client.HTTPMessage — нужен только get()."""
+
+    def get(self, name: str, /) -> str | None: ...
 
 
 class AuthError(Exception):
@@ -78,15 +85,15 @@ class RequestVerifier:
         # общий словарь одноразовых чисел защищаем блокировкой.
         self._lock = threading.Lock()
 
-    def verify(self, method: str, path: str, headers: Mapping[str, str], body: bytes) -> str:
+    def verify(self, method: str, path: str, headers: Headers, body: bytes) -> str:
         """Проверить запрос. Вернуть ID устройства-отправителя или выбросить AuthError."""
-        try:
-            device_id = headers[HEADER_DEVICE]
-            timestamp = headers[HEADER_TIMESTAMP]
-            nonce = headers[HEADER_NONCE]
-            signature = headers[HEADER_SIGNATURE]
-        except KeyError as missing:
-            raise AuthError(f"нет заголовка {missing}") from None
+        values = []
+        for name in (HEADER_DEVICE, HEADER_TIMESTAMP, HEADER_NONCE, HEADER_SIGNATURE):
+            value = headers.get(name)
+            if value is None:
+                raise AuthError(f"нет заголовка {name}")
+            values.append(value)
+        device_id, timestamp, nonce, signature = values
 
         key = self.key_for_device(device_id)
         if key is None:

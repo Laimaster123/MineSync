@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from blocksync.core.backups import Backup, delete_backup, list_backups, restore_backup
+from blocksync.core.staging import staging_root
 from blocksync.net.node import Node
 from blocksync.ui.errors import describe_error
 from blocksync.ui.strings import tr
@@ -151,16 +152,21 @@ class BackupsDialog(Dialog):
 
     def restore_selected(self) -> None:
         selected = self.selected()
-        if selected is None or selected[1].target is None:
+        if selected is None:
             return
         backup, group = selected
+        world_dir = group.target
+        if world_dir is None:
+            return
         key = "backups.confirm_restore_delta" if backup.is_delta else "backups.confirm_restore"
         if not self.confirm(tr(key, world=backup.world_name)):
             return
-        node, world_dir = self.node, group.target
+        node = self.node
 
         def work(task: Task) -> Path | None:
-            return restore_backup(backup, world_dir, node.paths.tmp_dir, group.backups_root, node.settings.keep_backups)
+            return restore_backup(
+                backup, world_dir, staging_root(world_dir.parent), group.backups_root, node.settings.keep_backups
+            )
 
         self.status_label.setText(tr("backups.restoring"))
         self._run(work, lambda _: self._after_action(tr("backups.restored", world=backup.world_name)))

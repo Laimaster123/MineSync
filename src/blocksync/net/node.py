@@ -5,16 +5,17 @@
 
 import logging
 import threading
-from dataclasses import replace
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from blocksync.config.app_lock import AppLock
 from blocksync.config.instances import Instance, instance_from_saves, make_instance
 from blocksync.config.paths import AppPaths, default_saves_dir
-from blocksync.config.settings import PairedDevice, Settings, load_settings, save_settings
+from blocksync.config.settings import PairedDevice, Settings, read_settings, save_settings
+from blocksync.config.sync_state import SyncStateStore
 from blocksync.core.backups import validate_keep
-from blocksync.core.staging import cleanup_leftovers
+from blocksync.core.staging import cleanup_leftovers, staging_root
 from blocksync.net.auth import RequestVerifier
 from blocksync.net.client import NetworkError, PeerClient
 from blocksync.net.discovery import Discovery, FoundDevice, PeerStatus, peer_status
@@ -54,8 +55,14 @@ class Node:
         self.on_change = on_change
         self.on_sync_request = on_sync_request
         self._settings_lock = threading.Lock()
-        self.settings: Settings = load_settings(paths.settings_file)
+        settings, broken = read_settings(paths.settings_file)
+        self.settings: Settings = settings
+        # Если файл настроек был повреждён — куда он отложен (интерфейс сообщит об этом).
+        self.broken_settings: Path | None = broken
         self._migrate_saves_dir()
+
+        # Каким был каждый мир после последней синхронизации (для подсказки «где играли»).
+        self.sync_states = SyncStateStore(paths.sync_state_dir)
 
         cert_path, key_path = ensure_certificate(paths.tls_dir, self.settings.device_id)
         self.cert_pem = cert_path.read_text(encoding="ascii")
@@ -76,6 +83,7 @@ class Node:
             resolve_instance=self._resolve_instance,
             on_instance_link=self._handle_instance_link,
             on_peer_changed=lambda device_id: self._notify(),
+            sync_state=self.sync_states.load,
         )
         self.discovery = self._new_discovery()
         self._lock = AppLock(paths.root)
@@ -199,6 +207,12 @@ class Node:
             self.settings.selected_tab = tab
             save_settings(self.settings, self.paths.settings_file)
 
+    def skip_version(self, version: str) -> None:
+        """Больше не предлагать обновиться до этой версии (о следующих — предлагать)."""
+        with self._settings_lock:
+            self.settings.skipped_version = version
+            save_settings(self.settings, self.paths.settings_file)
+
     def set_language(self, language: str) -> None:
         with self._settings_lock:
             self.settings.language = language
@@ -213,7 +227,9 @@ class Node:
         # Сначала «замок»: вторая копия программы с той же папкой данных дальше не пойдёт.
         self._lock.acquire()
         try:
-            cleanup_leftovers(self.paths.tmp_dir)
+            # Остатки прерванных синхронизаций: в старом месте (папка данных) и рядом с мирами.
+            for tmp_root in [self.paths.tmp_dir, *(staging_root(i.saves_dir) for i in self.instances())]:
+                cleanup_leftovers(tmp_root)
             self.server.start()
         except BaseException:
             self._lock.release()
@@ -240,7 +256,7 @@ class Node:
 
     def update_settings(
         self, device_name: str, saves_dir: Path | None, backups_dir: Path | None, keep_backups: int,
-        full_backup: bool | None = None,
+        full_backup: bool | None = None, check_updates: bool | None = None,
     ) -> None:
         """Сохранить новые настройки и сразу применить их к серверу и обнаружению."""
         validate_keep(keep_backups)
@@ -252,6 +268,8 @@ class Node:
             self.settings.keep_backups = keep_backups
             if full_backup is not None:
                 self.settings.full_backup = full_backup
+            if check_updates is not None:
+                self.settings.check_updates = check_updates
             save_settings(self.settings, self.paths.settings_file)
         self.server.saves_dir = self.saves_dir
         self.pairing.device_name = device_name

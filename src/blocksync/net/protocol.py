@@ -7,6 +7,8 @@
   GET  /api/v1/worlds                         список миров
   GET  /api/v1/worlds/<мир>/manifest          манифест мира, версия, занят ли он
   GET  /api/v1/worlds/<мир>/files/<путь>      содержимое файла (передаётся кусками)
+  GET  /api/v1/worlds/<мир>/sync-state         каким был мир после последней синхронизации
+                                              (404 — неизвестно; см. config/sync_state.py)
   POST /api/v1/sync-requests  {"world": ...}  просьба «забери мир у меня»
   POST /api/v1/unpair                         «забудь меня»: второе устройство удалило пару
   GET  /api/v1/instances                      сборки (Prism и др.): [{"id", "name"}]
@@ -14,6 +16,16 @@
   POST /api/v1/changed                        «у меня изменились миры» — обнови список
 
 Запросы к мирам принимают параметр ?instance=<ID сборки>; без него — папка saves по умолчанию.
+
+Передача файла (с версии 1.1). Клиент может прислать заголовки:
+  X-MineSync-Transfer: frames1   — передавать «кадрами» (сжатие и контрольная сумма, см. ниже);
+  Range: bytes=<N>-              — продолжить с байта N (докачка после обрыва связи);
+  X-MineSync-Expect: <размер> <время изменения> — каким клиент ждёт файл (по манифесту);
+                                   если файл с тех пор изменился, сервер ответит 409.
+Кадр: 1 байт вида + 4 байта длины + содержимое. Виды: 0 — кусок файла как есть,
+1 — кусок, сжатый zlib, 2 — конец: SHA-256 переданных байт (32 байта) и 1 байт флагов
+(флаг 1 — файл изменился, пока передавался). Старая версия программы этих заголовков
+не знает и просто отдаёт файл целиком — клиент умеет работать и так.
 Просьба забрать мир: {"world", "instance": сборка отправителя, "target_instance": сборка получателя}.
 
 Сопряжение (без подписи — общего ключа ещё нет, см. pairing.py):
@@ -21,6 +33,7 @@
   POST /api/v1/pair/confirm                   подтверждение кода и обмен сертификатами
 """
 
+import struct
 from dataclasses import dataclass, fields
 from typing import Any
 from urllib.parse import quote
@@ -44,6 +57,23 @@ HEADER_TIMESTAMP = "X-BlockSync-Timestamp"
 HEADER_NONCE = "X-BlockSync-Nonce"
 HEADER_SIGNATURE = "X-BlockSync-Signature"
 
+# Передача файлов кадрами (см. описание в начале модуля).
+HEADER_TRANSFER = "X-MineSync-Transfer"
+HEADER_EXPECT = "X-MineSync-Expect"
+TRANSFER_FRAMES = "frames1"
+FRAME_RAW = 0
+FRAME_ZLIB = 1
+FRAME_END = 2
+FRAME_FLAG_CHANGED = 1
+FRAME_HEADER = struct.Struct(">BI")  # вид (1 байт) и длина содержимого (4 байта)
+# Больше этого содержимое кадра быть не может (кусок файла — не больше 1 МБ).
+MAX_FRAME_BYTES = 1024 * 1024 + 4096
+
+
+def expect_header(size: int, mtime_ns: int) -> str:
+    """Значение заголовка X-MineSync-Expect: каким должен быть файл."""
+    return f"{size} {mtime_ns}"
+
 
 def with_instance(path: str, instance: str | None) -> str:
     """Добавить к адресу выбранную сборку: /api/v1/worlds?instance=prism%3A26.3"""
@@ -53,6 +83,10 @@ def with_instance(path: str, instance: str | None) -> str:
 def manifest_path(world: str) -> str:
     # quote заменяет пробелы, кириллицу и "/" на коды вида %20, чтобы адрес был корректным.
     return f"{WORLDS_PATH}/{quote(world, safe='')}/manifest"
+
+
+def sync_state_path(world: str) -> str:
+    return f"{WORLDS_PATH}/{quote(world, safe='')}/sync-state"
 
 
 def file_path(world: str, relative_path: str) -> str:

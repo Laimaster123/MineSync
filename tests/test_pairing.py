@@ -5,11 +5,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+from spake2 import SPAKE2_A
 
 from blocksync.config.settings import PairedDevice
 from blocksync.net.auth import RequestVerifier
 from blocksync.net.client import PeerClient
-from blocksync.net.pairing import CODE_LIFETIME_SECONDS, MAX_ATTEMPTS, PairingError, PairingHost, pair_with
+from blocksync.net.pairing import (
+    CODE_LIFETIME_SECONDS,
+    MAX_ATTEMPTS,
+    MAX_PENDING,
+    PairingError,
+    PairingHost,
+    pair_with,
+)
 from blocksync.net.server import SyncServer
 from blocksync.net.tls import client_context, ensure_certificate, server_context
 
@@ -146,3 +154,25 @@ def test_unpair_notifies_host(host: Host, guest_cert: str) -> None:
         client.unpair()
 
     assert forgotten == ["mac-id"]
+
+
+def test_wrong_code_error_has_code_for_translation(host: Host, guest_cert: str) -> None:
+    """Хозяин передаёт гостю вид ошибки, чтобы текст показался на языке гостя."""
+    code = host.pairing.start_code()
+    wrong = "000000" if code != "000000" else "111111"
+    with pytest.raises(PairingError) as caught:
+        pair_with(host.url, wrong, "mac-id", "Мак", guest_cert)
+    assert caught.value.code == "pair_wrong_code"
+    assert caught.value.params == {"left": MAX_ATTEMPTS - 1}
+
+
+def test_strangers_cannot_block_pairing(host: Host, guest_cert: str) -> None:
+    """Чужие незавершённые попытки не мешают настоящему гостю: старые попытки забываются."""
+    code = host.pairing.start_code()
+    for number in range(MAX_PENDING + 3):
+        stranger = SPAKE2_A(b"123456", idA=b"blocksync-guest", idB=b"blocksync-host")
+        host.pairing.handle_start({"device_id": f"stranger-{number}", "name": "?", "msg": stranger.start().hex()})
+
+    pair_with(host.url, code, "mac-id", "Мак", guest_cert)
+
+    assert [p.device_id for p in host.paired] == ["mac-id"]

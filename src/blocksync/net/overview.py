@@ -72,7 +72,7 @@ class WorldRow:
 class Overview:
     rows: list[WorldRow]
     saves_missing: bool  # папки saves на этом устройстве нет
-    peer_error: str | None  # не удалось получить миры другого устройства
+    peer_error: NetworkError | None  # не удалось получить миры другого устройства
 
 
 def build_overview(
@@ -91,12 +91,12 @@ def build_overview(
         local, saves_missing = {}, True
 
     remote: dict[str, RemoteWorld] | None = None
-    peer_error: str | None = None
+    peer_error: NetworkError | None = None
     if client is not None:
         try:
             remote = {w.folder_name: w for w in client.list_worlds()}
         except NetworkError as error:
-            peer_error = str(error)
+            peer_error = error
 
     rows: list[WorldRow] = []
     for name in sorted(set(local) | set(remote or {})):
@@ -109,7 +109,7 @@ def build_overview(
                 status = WorldStatus.NOT_LINKED
         except NetworkError as error:
             # Связь пропала посреди обновления: статус неизвестен, но список показываем.
-            peer_error = str(error)
+            peer_error = error
             status = WorldStatus.UNKNOWN
         rows.append(WorldRow(name, here, there, status, instance_id, instance_name))
     rows.sort(key=lambda row: row.last_modified_ns or 0, reverse=True)
@@ -148,7 +148,7 @@ def load_icons(rows: list[WorldRow], client: PeerClient | None) -> dict[str, byt
                 with open(row.local.icon_path, "rb") as file:
                     icons[row.folder_name] = file.read(MAX_ICON_BYTES)
             elif row.remote is not None and row.remote.has_icon and client is not None:
-                with client.open_file(row.folder_name, "icon.png") as stream:
+                with client.open_file(row.folder_name, "icon.png", retry=False) as stream:
                     icons[row.folder_name] = stream.read(MAX_ICON_BYTES)
         except (OSError, NetworkError) as error:
             # Без иконки список всё равно можно показать.

@@ -46,6 +46,8 @@ class Settings:
     instance_links: dict[str, str] = field(default_factory=dict)  # {наша сборка: сборка на втором устройстве}
     selected_tab: str | None = None  # открытая вкладка: ID сборки или "recent"
     language: str = "ru"
+    check_updates: bool = True  # при запуске проверять, нет ли новой версии на GitHub
+    skipped_version: str | None = None  # о какой версии пользователь попросил больше не напоминать
 
 
 def default_device_name() -> str:
@@ -71,12 +73,28 @@ def new_settings() -> Settings:
 
 def load_settings(path: Path) -> Settings:
     """Прочитать настройки. Если файла нет — создать новые (с новым ID) и сохранить."""
+    return read_settings(path)[0]
+
+
+def read_settings(path: Path) -> tuple[Settings, Path | None]:
+    """Прочитать настройки; второе значение — куда отложен повреждённый файл (или None).
+
+    Повреждённый файл (например, его испортили вручную) не должен мешать запуску:
+    он переименовывается в settings.broken.json, а программа начинает с новых настроек.
+    """
     if not path.exists():
         settings = new_settings()
         save_settings(settings, path)
-        return settings
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return _from_json(data)
+        return settings, None
+    try:
+        return _from_json(json.loads(path.read_text(encoding="utf-8"))), None
+    except (ValueError, KeyError, TypeError, AttributeError) as error:
+        broken = path.with_name(f"{path.stem}.broken{path.suffix}")
+        logger.error("Файл настроек %s повреждён (%s), он сохранён как %s", path, error, broken)
+        os.replace(path, broken)
+        settings = new_settings()
+        save_settings(settings, path)
+        return settings, broken
 
 
 def save_settings(settings: Settings, path: Path) -> None:
@@ -108,6 +126,8 @@ def _to_json(settings: Settings) -> dict[str, Any]:
         "instance_links": settings.instance_links,
         "selected_tab": settings.selected_tab,
         "language": settings.language,
+        "check_updates": settings.check_updates,
+        "skipped_version": settings.skipped_version,
         "paired": None if paired is None else {
             "device_id": paired.device_id,
             "name": paired.name,
@@ -140,4 +160,6 @@ def _from_json(data: dict[str, Any]) -> Settings:
         instance_links=dict(data.get("instance_links") or {}),
         selected_tab=data.get("selected_tab"),
         language=data.get("language") or "ru",
+        check_updates=bool(data.get("check_updates", True)),
+        skipped_version=data.get("skipped_version"),
     )
