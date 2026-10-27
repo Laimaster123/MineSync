@@ -37,6 +37,8 @@ class SettingsDialog(Dialog):
         self.keep_spin.setValue(s.keep_backups)
         self.full_backup_box = QCheckBox(tr("settings.full_backup"))
         self.full_backup_box.setChecked(s.full_backup)
+        self.updates_box = QCheckBox(tr("settings.check_updates"))
+        self.updates_box.setChecked(s.check_updates)
         self.backups_edit = QLineEdit(str(s.backups_dir) if s.backups_dir else "")
         self.backups_edit.setPlaceholderText(str(node.paths.default_backups_dir))
         self.error_label = QLabel()
@@ -52,6 +54,7 @@ class SettingsDialog(Dialog):
         full_hint.setProperty("role", "hint")
         form.addRow("", full_hint)
         form.addRow(tr("settings.backups_dir"), self._with_browse(self.backups_edit))
+        form.addRow("", self.updates_box)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
@@ -114,5 +117,6 @@ class SettingsDialog(Dialog):
             backups_dir=Path(backups_text).expanduser() if backups_text else None,
             keep_backups=self.keep_spin.value(),
             full_backup=self.full_backup_box.isChecked(),
+            check_updates=self.updates_box.isChecked(),
         )
         self.accept()

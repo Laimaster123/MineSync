@@ -210,5 +210,14 @@
   "sync.suggest_conflict": "Careful: since the last sync ({time}) the world changed on both computers. Choose whose version to keep — the changes on the other computer will be lost (the old file versions stay in a backup).",
   "sync.warning_both_changed": "Since the last sync the world changed on both «{source}» and «{receiver}». The changes on «{receiver}» will be lost (the old file versions will be kept in a backup).",
   "sync.warning_receiver_changed": "Since the last sync the world changed only on «{receiver}», not on «{source}». Are you sure you played on «{source}» last?",
-  "sync.compressed": "Thanks to compression only {sent} went over the network ({percent}% less)."
+  "sync.compressed": "Thanks to compression only {sent} went over the network ({percent}% less).",
+  "settings.check_updates": "Check for updates on startup",
+  "update.title": "MineSync update",
+  "update.heading": "Version {version} is available!",
+  "update.current": "You have version {version}. What's new:",
+  "update.no_notes": "See the release page for the list of changes.",
+  "update.hint": "«Download» opens the archive download in your browser. Quit MineSync, unpack the archive and replace the old app with it. Pairing, instances, history and backups are kept. Update the app on both computers.",
+  "update.download": "Download",
+  "update.later": "Later",
+  "update.skip": "Skip this version"
 }

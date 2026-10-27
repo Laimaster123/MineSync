@@ -46,6 +46,8 @@ class Settings:
     instance_links: dict[str, str] = field(default_factory=dict)  # {наша сборка: сборка на втором устройстве}
     selected_tab: str | None = None  # открытая вкладка: ID сборки или "recent"
     language: str = "ru"
+    check_updates: bool = True  # при запуске проверять, нет ли новой версии на GitHub
+    skipped_version: str | None = None  # о какой версии пользователь попросил больше не напоминать
 
 
 def default_device_name() -> str:
@@ -124,6 +126,8 @@ def _to_json(settings: Settings) -> dict[str, Any]:
         "instance_links": settings.instance_links,
         "selected_tab": settings.selected_tab,
         "language": settings.language,
+        "check_updates": settings.check_updates,
+        "skipped_version": settings.skipped_version,
         "paired": None if paired is None else {
             "device_id": paired.device_id,
             "name": paired.name,
@@ -156,4 +160,6 @@ def _from_json(data: dict[str, Any]) -> Settings:
         instance_links=dict(data.get("instance_links") or {}),
         selected_tab=data.get("selected_tab"),
         language=data.get("language") or "ru",
+        check_updates=bool(data.get("check_updates", True)),
+        skipped_version=data.get("skipped_version"),
     )

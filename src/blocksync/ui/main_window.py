@@ -27,7 +27,9 @@ from blocksync.net.client import NetworkError
 from blocksync.net.discovery import PeerStatus
 from blocksync.net.node import Node
 from blocksync.net.overview import WorldRow, build_overview, load_icons
+from blocksync.net import updates
 from blocksync.net.protocol import RemoteInstance, SyncRequest
+from blocksync.net.updates import Release
 from blocksync.ui import icons
 from blocksync.ui.backups_dialog import BackupsDialog
 from blocksync.ui.change_watcher import WorldWatcher
@@ -39,6 +41,7 @@ from blocksync.ui.pairing_dialog import PairingDialog
 from blocksync.ui.settings_dialog import SettingsDialog
 from blocksync.ui.strings import LANGUAGES, current_language, set_language, tr
 from blocksync.ui.sync_dialog import SyncDialog
+from blocksync.ui.update_dialog import UpdateDialog
 from blocksync.ui.theme import Colors, rgba
 from blocksync.ui.widgets import (
     AchievementToast,
@@ -62,6 +65,8 @@ logger = logging.getLogger(__name__)
 REFRESH_DELAY_MS = 300
 # Сколько миров показывать на вкладке «Недавние».
 RECENT_LIMIT = 8
+# Проверять обновления чуть позже запуска, чтобы не мешать первому обновлению списка (мс).
+UPDATE_CHECK_DELAY_MS = 3000
 
 INSTANCE_PROBLEM_KEYS = {
     InstanceProblem.NOT_A_FOLDER: "instances.error_not_a_folder",
@@ -159,6 +164,7 @@ class MainWindow(QMainWindow):
         self._refresh_task: Task | None = None
         self._refresh_again = False
         self.sync_dialog: SyncDialog | None = None
+        self.pending_update: Release | None = None  # новая версия, о которой скажем после синхронизации
 
         set_language(node.settings.language)
         self.setWindowTitle("MineSync")
@@ -177,6 +183,11 @@ class MainWindow(QMainWindow):
         self.watcher.changed.connect(self._on_worlds_changed)
 
         self.refresh()
+        if node.settings.check_updates:
+            self._update_timer = QTimer(self)
+            self._update_timer.setSingleShot(True)
+            self._update_timer.timeout.connect(self.check_updates)
+            self._update_timer.start(UPDATE_CHECK_DELAY_MS)
 
     # --- Построение окна ---
 
@@ -564,6 +575,23 @@ class MainWindow(QMainWindow):
         self.watcher.paused = False
         self._update_sync_button()
         self._on_worlds_changed()
+        if self.pending_update is not None:
+            release, self.pending_update = self.pending_update, None
+            self._offer_update(release)
+
+    # --- Обновления программы ---
+
+    def check_updates(self) -> None:
+        """Спросить GitHub, нет ли новой версии (в фоне); если есть — предложить обновиться."""
+        run_task(lambda task: updates.check_for_update(__version__), on_done=self._offer_update)
+
+    def _offer_update(self, release: Release | None) -> None:
+        if release is None or release.version == self.node.settings.skipped_version:
+            return
+        if self.sync_dialog is not None:
+            self.pending_update = release  # не перебиваем синхронизацию: покажем после неё
+            return
+        UpdateDialog(self.node, release, parent=self).open()
 
     # --- Окна ---
 

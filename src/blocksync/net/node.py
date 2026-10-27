@@ -207,6 +207,12 @@ class Node:
             self.settings.selected_tab = tab
             save_settings(self.settings, self.paths.settings_file)
 
+    def skip_version(self, version: str) -> None:
+        """Больше не предлагать обновиться до этой версии (о следующих — предлагать)."""
+        with self._settings_lock:
+            self.settings.skipped_version = version
+            save_settings(self.settings, self.paths.settings_file)
+
     def set_language(self, language: str) -> None:
         with self._settings_lock:
             self.settings.language = language
@@ -250,7 +256,7 @@ class Node:
 
     def update_settings(
         self, device_name: str, saves_dir: Path | None, backups_dir: Path | None, keep_backups: int,
-        full_backup: bool | None = None,
+        full_backup: bool | None = None, check_updates: bool | None = None,
     ) -> None:
         """Сохранить новые настройки и сразу применить их к серверу и обнаружению."""
         validate_keep(keep_backups)
@@ -262,6 +268,8 @@ class Node:
             self.settings.keep_backups = keep_backups
             if full_backup is not None:
                 self.settings.full_backup = full_backup
+            if check_updates is not None:
+                self.settings.check_updates = check_updates
             save_settings(self.settings, self.paths.settings_file)
         self.server.saves_dir = self.saves_dir
         self.pairing.device_name = device_name

@@ -17,7 +17,9 @@ from pytestqt.qtbot import QtBot
 from blocksync.config.history import Direction, SyncRecord, add_record, load_history
 from blocksync.core.backups import list_backups
 from blocksync.net.node import Node
+from blocksync.net import updates
 from blocksync.net.overview import WorldStatus
+from blocksync.net.updates import Release
 from blocksync.resources import resource_path
 from blocksync.ui.backups_dialog import BackupsDialog, load_all_backups
 from blocksync.ui.history_dialog import HistoryDialog
@@ -26,6 +28,7 @@ from blocksync.ui.main_window import MainWindow
 from blocksync.ui.pairing_dialog import PairingDialog
 from blocksync.ui.settings_dialog import SettingsDialog
 from blocksync.ui.sync_dialog import SyncDialog
+from blocksync.ui.update_dialog import UpdateDialog
 from blocksync.ui.worker import NodeBridge
 from helpers import BASE_TIME, hold_lock, make_level_dat, make_world, read_world, write_file
 from test_discovery import wait_until
@@ -269,11 +272,36 @@ def test_settings_dialog(devices: tuple[Device, Device], qtbot: QtBot, tmp_path:
     dialog.backups_edit.setText(str(tmp_path / "бэкапы"))
     dialog.name_edit.setText("Мой Мак")
     dialog.keep_spin.setValue(5)
+    assert dialog.updates_box.isChecked()  # по умолчанию обновления проверяются
+    dialog.updates_box.setChecked(False)
     dialog.save()
 
     assert mac.node.settings.device_name == "Мой Мак"
     assert mac.node.settings.keep_backups == 5
     assert mac.node.backups_dir == tmp_path / "бэкапы"
+    assert not mac.node.settings.check_updates
+
+
+def test_update_is_offered_after_sync_and_skipped_version_is_not(
+    devices: tuple[Device, Device], qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, mac = devices
+    release = Release("9.0.0", "https://x", "https://x/a.zip", "")
+    monkeypatch.setattr(updates, "check_for_update", lambda current, transport=None: release)
+    window = mac.open_window(qtbot)
+
+    window.check_updates()
+    qtbot.waitUntil(lambda: _update_dialog(window) is not None, timeout=TIMEOUT_MS)
+    dialog = _update_dialog(window)
+    assert dialog is not None
+    dialog.skip_button.click()
+
+    window._offer_update(release)  # о пропущенной версии больше не напоминаем
+    assert _update_dialog(window) is None
+
+
+def _update_dialog(window: MainWindow) -> UpdateDialog | None:
+    return next((d for d in window.findChildren(UpdateDialog) if d.isVisible()), None)
 
 
 def test_backups_dialog_restores(devices: tuple[Device, Device], qtbot: QtBot) -> None:
