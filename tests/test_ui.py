@@ -25,6 +25,7 @@ from blocksync.ui.format import format_count, format_duration, format_play_time,
 from blocksync.ui.main_window import MainWindow
 from blocksync.ui.pairing_dialog import PairingDialog
 from blocksync.ui.settings_dialog import SettingsDialog
+from blocksync.ui.sync_dialog import SyncDialog
 from blocksync.ui.worker import NodeBridge
 from helpers import BASE_TIME, hold_lock, make_level_dat, make_world, read_world, write_file
 from test_discovery import wait_until
@@ -167,9 +168,9 @@ def test_pull_world_through_sync_dialog(devices: tuple[Device, Device], qtbot: Q
     window.start_sync(window.world_list.row_for("TEST").row)
     dialog = window.sync_dialog
     assert dialog is not None
-    # Ничего не выбрано заранее, «Далее» неактивна.
-    assert not dialog.next_button.isEnabled()
-    dialog.peer_radio.setChecked(True)
+    # Мир есть только на ПК — подсказка сама отмечает «ПК», «Далее» становится активной.
+    qtbot.waitUntil(lambda: dialog.peer_radio.isChecked(), timeout=TIMEOUT_MS)
+    assert "только на «ПК»" in dialog.suggestion_label.text()
     assert dialog.next_button.isEnabled()
     dialog.next_button.click()
 
@@ -179,6 +180,7 @@ def test_pull_world_through_sync_dialog(devices: tuple[Device, Device], qtbot: Q
 
     qtbot.waitUntil(lambda: dialog.pages.currentIndex() == 3, timeout=TIMEOUT_MS)
     assert "Готово" in dialog.result_label.text(), dialog.result_label.text()
+    assert "Благодаря сжатию" in dialog.result_label.text()  # 3 МБ одинаковых байт сжимаются в разы
     assert read_world(mac.saves / "TEST") == read_world(pc_world)
     # Выехало «достижение».
     assert not window.toast.isHidden() and "TEST" in window.toast.text.text()
@@ -492,3 +494,58 @@ def test_rows_sorted_by_last_sync_and_scroll_kept(devices: tuple[Device, Device]
     qtbot.waitUntil(lambda: window._refresh_task is None, timeout=TIMEOUT_MS)
     qtbot.wait(100)
     assert bar.value() == position
+
+
+def test_direction_is_suggested_from_last_sync(devices: tuple[Device, Device], qtbot: QtBot) -> None:
+    """После синхронизации мир изменили на Маке — подсказка «играли здесь»; изменили и на ПК — конфликт."""
+    pc, mac = devices
+    add_world(pc, "TEST", {"a": b"1", "b": b"2"})
+    pair_devices(pc, mac)
+    window = mac.open_window(qtbot)
+    wait_for_rows(qtbot, window, lambda rows: rows and rows[0].status is WorldStatus.ONLY_THERE)
+    dialog = _run_pull(window, qtbot)
+    dialog.accept()
+    assert mac.node.sync_states.load(mac.instance_id, "TEST") is not None
+
+    # Играли на Маке (часы при этом пусть показывают более раннее время — подсказка от них не зависит).
+    write_file(mac.saves / "TEST" / "a", b"played on mac", mtime=BASE_TIME - 500)
+    window.start_sync(window.world_list.row_for("TEST").row)
+    dialog = window.sync_dialog
+    assert dialog is not None
+    qtbot.waitUntil(lambda: dialog.here_radio.isChecked(), timeout=TIMEOUT_MS)
+    assert "изменился только на этом компьютере" in dialog.suggestion_label.text()
+    # Если всё же выбрать «ПК», будет предупреждение, что менялся только Мак.
+    dialog.peer_radio.setChecked(True)
+    dialog.next_button.click()
+    qtbot.waitUntil(lambda: dialog.preview is not None, timeout=TIMEOUT_MS)
+    assert "менялся только на «Мак»" in dialog.warnings_label.text()
+    dialog.reject()
+    qtbot.waitUntil(lambda: window.sync_dialog is None, timeout=TIMEOUT_MS)
+
+    # Теперь поиграли и на ПК: конфликт, ничего не отмечено.
+    write_file(pc.saves / "TEST" / "b", b"played on pc", mtime=BASE_TIME + 900)
+    window.start_sync(window.world_list.row_for("TEST").row)
+    dialog = window.sync_dialog
+    assert dialog is not None
+    qtbot.waitUntil(lambda: "на обоих компьютерах" in dialog.suggestion_label.text(), timeout=TIMEOUT_MS)
+    assert dialog.choice.checkedButton() is None
+    dialog.here_radio.setChecked(True)
+    dialog.next_button.click()
+    qtbot.waitUntil(lambda: dialog.preview is not None, timeout=TIMEOUT_MS)
+    assert "изменился и на «Мак», и на «ПК»" in dialog.warnings_label.text()
+    assert not dialog.start_button.isEnabled()  # нужно подтверждение
+    dialog.reject()
+
+
+def _run_pull(window: MainWindow, qtbot: QtBot) -> SyncDialog:
+    """Синхронизировать мир TEST «с другого компьютера» через окно и дождаться итога."""
+    window.start_sync(window.world_list.row_for("TEST").row)
+    dialog = window.sync_dialog
+    assert dialog is not None
+    dialog.peer_radio.setChecked(True)
+    dialog.next_button.click()
+    qtbot.waitUntil(lambda: dialog.start_button.isEnabled(), timeout=TIMEOUT_MS)
+    dialog.start_button.click()
+    qtbot.waitUntil(lambda: dialog.pages.currentIndex() == 3, timeout=TIMEOUT_MS)
+    assert "Готово" in dialog.result_label.text(), dialog.result_label.text()
+    return dialog

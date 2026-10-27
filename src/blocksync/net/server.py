@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from blocksync.config.sync_state import SyncState, state_to_json
 from blocksync.core.apply import CHUNK_SIZE
 from blocksync.core.level_dat import LevelDatError, read_level_info
 from blocksync.core.lock import is_world_locked
@@ -61,6 +62,7 @@ SOCKET_TIMEOUT_SECONDS = 60
 
 # Регулярные выражения для разбора адреса: (?P<world>...) — именованная часть.
 _MANIFEST_RE = re.compile(rf"^{WORLDS_PATH}/(?P<world>[^/]+)/manifest$")
+_SYNC_STATE_RE = re.compile(rf"^{WORLDS_PATH}/(?P<world>[^/]+)/sync-state$")
 _FILE_RE = re.compile(rf"^{WORLDS_PATH}/(?P<world>[^/]+)/files/(?P<path>.+)$")
 # Поддерживаем только «с байта N до конца» — этого хватает для докачки.
 _RANGE_RE = re.compile(r"^bytes=(?P<start>\d+)-$")
@@ -78,6 +80,8 @@ INCOMPRESSIBLE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gz", ".zip", ".j
 SyncRequestHandler = Callable[[str, SyncRequest], None]
 # Сообщение о связи сборок: (ID устройства, наша сборка, сборка того устройства или None).
 InstanceLinkHandler = Callable[[str, str, str | None], None]
+# Состояние мира после последней синхронизации: (сборка или None, папка мира) -> состояние или None.
+SyncStateProvider = Callable[[str | None, str], SyncState | None]
 
 
 class RequestError(Exception):
@@ -99,6 +103,7 @@ class SyncServer:
     world_notes: описания миров, которые видит второе устройство ({папка: текст}).
     instances: список сборок [(ID, название)]; resolve_instance: папка saves сборки по ID.
     on_instance_link: второе устройство сообщило о связи сборок.
+    sync_state: каким был мир после последней синхронизации (для подсказки направления).
     """
 
     def __init__(
@@ -116,8 +121,10 @@ class SyncServer:
         resolve_instance: Callable[[str], Path | None] | None = None,
         on_instance_link: InstanceLinkHandler | None = None,
         on_peer_changed: Callable[[str], None] | None = None,
+        sync_state: SyncStateProvider | None = None,
     ) -> None:
         self.saves_dir = saves_dir
+        self.sync_state = sync_state
         self.world_notes = world_notes
         self.instances = instances
         self.resolve_instance = resolve_instance
@@ -236,7 +243,10 @@ class _Handler(BaseHTTPRequestHandler):
             device_id = app.verifier.verify(method, self.path, self.headers, body)
             if method == "GET":
                 instance = parse_qs(urlsplit(self.path).query).get("instance", [None])[0]
-                self._route_get(app, path, app.saves_for(instance))
+                if match := _SYNC_STATE_RE.match(path):
+                    self._send_sync_state(app, instance, match["world"])
+                else:
+                    self._route_get(app, path, app.saves_for(instance))
             else:
                 self._route_post(app, path, device_id, body)
         except AuthError as error:
@@ -323,6 +333,14 @@ class _Handler(BaseHTTPRequestHandler):
             raise RequestError(HTTPStatus.SERVICE_UNAVAILABLE, "устройство не может принять мир")
         app.on_sync_request(device_id, SyncRequest(world, instance, target))
         self._send_json(HTTPStatus.ACCEPTED, {"status": "accepted"})
+
+    def _send_sync_state(self, app: SyncServer, instance: str | None, world: str) -> None:
+        if not is_safe_world_name(world):
+            raise RequestError(HTTPStatus.BAD_REQUEST, "неверное имя мира")
+        state = app.sync_state(instance, world) if app.sync_state is not None else None
+        if state is None:
+            raise RequestError(HTTPStatus.NOT_FOUND, "мир ещё не синхронизировался")
+        self._send_json(HTTPStatus.OK, state_to_json(state))
 
     def _send_manifest(self, world_dir: Path) -> None:
         try:

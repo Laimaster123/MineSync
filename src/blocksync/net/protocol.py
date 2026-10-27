@@ -7,6 +7,8 @@
   GET  /api/v1/worlds                         список миров
   GET  /api/v1/worlds/<мир>/manifest          манифест мира, версия, занят ли он
   GET  /api/v1/worlds/<мир>/files/<путь>      содержимое файла (передаётся кусками)
+  GET  /api/v1/worlds/<мир>/sync-state         каким был мир после последней синхронизации
+                                              (404 — неизвестно; см. config/sync_state.py)
   POST /api/v1/sync-requests  {"world": ...}  просьба «забери мир у меня»
   POST /api/v1/unpair                         «забудь меня»: второе устройство удалило пару
   GET  /api/v1/instances                      сборки (Prism и др.): [{"id", "name"}]
@@ -81,6 +83,10 @@ def with_instance(path: str, instance: str | None) -> str:
 def manifest_path(world: str) -> str:
     # quote заменяет пробелы, кириллицу и "/" на коды вида %20, чтобы адрес был корректным.
     return f"{WORLDS_PATH}/{quote(world, safe='')}/manifest"
+
+
+def sync_state_path(world: str) -> str:
+    return f"{WORLDS_PATH}/{quote(world, safe='')}/sync-state"
 
 
 def file_path(world: str, relative_path: str) -> str:

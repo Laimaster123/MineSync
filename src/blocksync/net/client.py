@@ -18,6 +18,7 @@ from typing import Any, BinaryIO
 
 import httpx
 
+from blocksync.config.sync_state import SyncState, state_from_json
 from blocksync.core.apply import CHUNK_SIZE, SyncCancelled
 from blocksync.core.manifest import FileEntry
 from blocksync.net.auth import sign_request
@@ -43,6 +44,7 @@ from blocksync.net.protocol import (
     file_path,
     manifest_from_json,
     manifest_path,
+    sync_state_path,
     with_instance,
     expect_header,
     world_from_json,
@@ -129,6 +131,18 @@ class PeerClient:
 
     def get_manifest(self, world: str) -> RemoteManifest:
         return manifest_from_json(self._request_json("GET", with_instance(manifest_path(world), self.instance)))
+
+    def get_sync_state(self, world: str) -> SyncState | None:
+        """Каким был мир после последней синхронизации, по сведениям того устройства (None — неизвестно)."""
+        try:
+            return state_from_json(self._request_json("GET", with_instance(sync_state_path(world), self.instance)))
+        except NetworkError as error:
+            if error.code == "net_not_found":  # не синхронизировался или там версия 1.0
+                return None
+            raise
+        except (KeyError, TypeError, ValueError):
+            logger.warning("Другое устройство прислало неверное состояние мира %s", world)
+            return None
 
     def notify_changed(self) -> None:
         """Сообщить второму устройству, что здесь изменились миры (пусть обновит список)."""

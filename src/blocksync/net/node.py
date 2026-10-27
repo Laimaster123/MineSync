@@ -12,6 +12,7 @@ from pathlib import Path
 from blocksync.config.app_lock import AppLock
 from blocksync.config.instances import Instance, instance_from_saves, make_instance
 from blocksync.config.paths import AppPaths, default_saves_dir
+from blocksync.config.sync_state import SyncStateStore
 from blocksync.config.settings import PairedDevice, Settings, read_settings, save_settings
 from blocksync.core.backups import validate_keep
 from blocksync.core.staging import cleanup_leftovers, staging_root
@@ -60,6 +61,9 @@ class Node:
         self.broken_settings: Path | None = broken
         self._migrate_saves_dir()
 
+        # Каким был каждый мир после последней синхронизации (для подсказки «где играли»).
+        self.sync_states = SyncStateStore(paths.sync_state_dir)
+
         cert_path, key_path = ensure_certificate(paths.tls_dir, self.settings.device_id)
         self.cert_pem = cert_path.read_text(encoding="ascii")
         self.pairing = PairingHost(
@@ -79,6 +83,7 @@ class Node:
             resolve_instance=self._resolve_instance,
             on_instance_link=self._handle_instance_link,
             on_peer_changed=lambda device_id: self._notify(),
+            sync_state=self.sync_states.load,
         )
         self.discovery = self._new_discovery()
         self._lock = AppLock(paths.root)

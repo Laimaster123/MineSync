@@ -42,6 +42,10 @@ class AppPaths:
         return self.root / "history.json"
 
     @property
+    def sync_state_dir(self) -> Path:
+        return self.root / "sync_state"
+
+    @property
     def tmp_dir(self) -> Path:
         return self.root / "tmp"
 

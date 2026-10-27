@@ -24,6 +24,9 @@ class SyncWarning(Enum):
     RECEIVER_NEWER = "receiver_newer"  # мир у получателя изменён позже, чем у эталона
     DOWNGRADE = "downgrade"  # у получателя мир более новой версии игры
     MASS_DELETE = "mass_delete"  # удаляется слишком много файлов
+    # Ниже — по состоянию после прошлой синхронизации (config/sync_state.py):
+    BOTH_CHANGED = "both_changed"  # мир изменился на обоих устройствах: изменения получателя пропадут
+    RECEIVER_CHANGED = "receiver_changed"  # мир менялся только у получателя: похоже, направление выбрано не то
 
 
 class SyncBlocker(Enum):

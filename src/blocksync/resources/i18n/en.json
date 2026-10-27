@@ -199,5 +199,16 @@
   "error.pair_expired": "The code has expired. Show a new code and enter it.",
   "error.pair_not_started": "Pairing wasn't started. Try again.",
   "error.pair_wrong_code": "Wrong code. Attempts left: {left}.",
-  "error.pair_not_confirmed": "The other computer didn't confirm the code — someone may be interfering on the network. Pairing was cancelled."
+  "error.pair_not_confirmed": "The other computer didn't confirm the code — someone may be interfering on the network. Pairing was cancelled.",
+  "sync.suggest_checking": "Checking where the world changed since the last sync…",
+  "sync.suggest_here": "Looks like you played here last: since the last sync ({time}) the world changed only on this computer.",
+  "sync.suggest_there": "Looks like you played on «{peer}» last: since the last sync ({time}) the world changed only there.",
+  "sync.suggest_newer_here": "Looks like you played here last: the world files on this computer are newer.",
+  "sync.suggest_newer_there": "Looks like you played on «{peer}» last: the world files there are newer.",
+  "sync.suggest_only_here": "This world exists only on this computer.",
+  "sync.suggest_only_there": "This world exists only on «{peer}».",
+  "sync.suggest_conflict": "Careful: since the last sync ({time}) the world changed on both computers. Choose whose version to keep — the changes on the other computer will be lost (the old file versions stay in a backup).",
+  "sync.warning_both_changed": "Since the last sync the world changed on both «{source}» and «{receiver}». The changes on «{receiver}» will be lost (the old file versions will be kept in a backup).",
+  "sync.warning_receiver_changed": "Since the last sync the world changed only on «{receiver}», not on «{source}». Are you sure you played on «{source}» last?",
+  "sync.compressed": "Thanks to compression only {sent} went over the network ({percent}% less)."
 }

@@ -11,12 +11,14 @@ import threading
 import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import BinaryIO
 
 import httpx
 import pytest
 
+from blocksync.config.sync_state import SyncState
 from blocksync.core.compare import compare
 from blocksync.core.lock import WorldLockedError
 from blocksync.core.manifest import FileEntry, build_manifest
@@ -389,3 +391,13 @@ def test_staging_is_next_to_worlds_and_removed(devices: Devices) -> None:
     pull_world(devices.client, "Мой мир", devices.mac_saves, tmp, devices.mac_backups, 3)
     assert not tmp.exists()
     assert [p.name for p in devices.mac_saves.iterdir()] == ["Мой мир"]
+
+
+def test_sync_state_is_shared_with_other_computer(devices: Devices) -> None:
+    """Подсказку можно дать и на компьютере, который мир отдавал: он спрашивает состояние у получателя."""
+    assert devices.client.get_sync_state("Мой мир") is None  # сервер его не знает
+    saved = SyncState(datetime(2026, 10, 20, 18, 0), {"a": FileEntry("a", 1, 5)})
+    devices.server.sync_state = lambda instance, world: saved if (instance, world) == (None, "Мой мир") else None
+
+    assert devices.client.get_sync_state("Мой мир") == saved
+    assert devices.client.get_sync_state("Другой мир") is None

@@ -1,5 +1,8 @@
 """Окно синхронизации: «где играл последним?» -> сводка и предупреждения -> прогресс -> итог.
 
+На первом шаге программа сама подсказывает ответ: сравнивает мир с тем, каким он
+был после прошлой синхронизации (net/sync.suggest_direction), и отмечает вариант.
+
 Если синхронизацию начали на другом устройстве (там выбрали «играл здесь»),
 окно открывается сразу на шаге прогресса: этот компьютер забирает мир.
 """
@@ -26,11 +29,22 @@ from blocksync.config.history import Direction as HistoryDirection
 from blocksync.config.history import add_record, new_record
 from blocksync.core.apply import SyncResult
 from blocksync.core.checks import MASS_DELETE_THRESHOLD, SyncBlocker, SyncWarning
+from blocksync.core.manifest import build_manifest
 from blocksync.core.staging import staging_root
 from blocksync.net.client import NetworkError, PeerClient
 from blocksync.net.node import Node
 from blocksync.net.pull import pull_world
-from blocksync.net.sync import Direction, SyncPreview, prepare_sync
+from blocksync.net.sync import (
+    Basis,
+    Direction,
+    Suggestion,
+    SyncPreview,
+    last_sync_state,
+    local_side,
+    prepare_sync,
+    remote_side,
+    suggest_direction,
+)
 from blocksync.ui.errors import describe_error
 from blocksync.ui.format import format_count, format_duration, format_size
 from blocksync.ui.strings import tr
@@ -41,6 +55,8 @@ from blocksync.ui.worker import Task, run_task
 logger = logging.getLogger(__name__)
 
 WARNING_KEYS = {
+    SyncWarning.BOTH_CHANGED: "sync.warning_both_changed",
+    SyncWarning.RECEIVER_CHANGED: "sync.warning_receiver_changed",
     SyncWarning.RECEIVER_NEWER: "sync.warning_receiver_newer",
     SyncWarning.DOWNGRADE: "sync.warning_downgrade",
     SyncWarning.MASS_DELETE: "sync.warning_mass_delete",
@@ -51,6 +67,8 @@ BLOCKER_KEYS = {
     SyncBlocker.SOURCE_MISSING: "sync.blocker_source_missing",
 }
 PROGRESS_STEPS = 1000  # полоса прогресса считает в тысячных долях
+# Сообщать о сжатии, только если по сети ушло меньше 90% объёма файлов.
+COMPRESSION_NOTICE_RATIO = 0.9
 
 
 class SyncDialog(Dialog):
@@ -91,6 +109,8 @@ class SyncDialog(Dialog):
             self.direction = Direction.PULL
             self.progress_title.setText(tr("sync.incoming", peer=self.peer_name, world=display_name))
             self._start_pull()
+        else:
+            self._suggest()
 
     # --- Шаг 1: где играл последним ---
 
@@ -100,7 +120,10 @@ class SyncDialog(Dialog):
         question.setWordWrap(True)
         self.here_radio = QRadioButton(tr("sync.this_computer", name=self.node.settings.device_name))
         self.peer_radio = QRadioButton(self.peer_name)
-        # Значение по умолчанию не выбрано: пользователь должен ответить сам.
+        self.suggestion_label = QLabel(tr("sync.suggest_checking"))
+        self.suggestion_label.setWordWrap(True)
+        self.suggestion_label.setProperty("role", "hint")
+        # Сразу ничего не выбрано: вариант отметит подсказка, а если её нет — ответит пользователь.
         self.choice = QButtonGroup(self)
         self.choice.addButton(self.here_radio)
         self.choice.addButton(self.peer_radio)
@@ -115,9 +138,44 @@ class SyncDialog(Dialog):
         layout.addWidget(question)
         layout.addWidget(self.here_radio)
         layout.addWidget(self.peer_radio)
+        layout.addWidget(self.suggestion_label)
         layout.addStretch()
         layout.addLayout(_buttons(cancel, self.next_button))
         return page
+
+    def _suggest(self) -> None:
+        """В фоне сравнить мир с прошлой синхронизацией и подсказать, где играли последним."""
+        node, world, saves_dir = self.node, self.world, self.saves_dir
+        remote, local = self.remote_instance, self.local_instance
+
+        def work(task: Task) -> Suggestion:
+            with _peer_client(node, remote) as client:
+                last_sync = last_sync_state(client, world, node.sync_states.load(local, world))
+                there = remote_side(client, world).manifest
+            return suggest_direction(local_side(saves_dir / world).manifest, there, last_sync)
+
+        run_task(work, on_done=self._show_suggestion, on_error=lambda error: self.suggestion_label.hide())
+
+    def _show_suggestion(self, suggestion: Suggestion) -> None:
+        when = suggestion.last_sync.time.strftime("%d.%m %H:%M") if suggestion.last_sync else ""
+        here_name = self.node.settings.device_name
+        if suggestion.conflict:
+            self.suggestion_label.setText(tr("sync.suggest_conflict", time=when))
+            self.suggestion_label.setStyleSheet(f"color: {Colors.YELLOW.name()};")
+            return
+        if suggestion.direction is None:
+            self.suggestion_label.hide()
+            return
+        here = suggestion.direction is Direction.PUSH
+        keys = {
+            Basis.LAST_SYNC: ("sync.suggest_here", "sync.suggest_there"),
+            Basis.NEWER_FILES: ("sync.suggest_newer_here", "sync.suggest_newer_there"),
+            None: ("sync.suggest_only_here", "sync.suggest_only_there"),
+        }[suggestion.basis]
+        self.suggestion_label.setText(tr(keys[0] if here else keys[1], time=when, here=here_name, peer=self.peer_name))
+        # Не перебиваем выбор, если пользователь успел ответить сам.
+        if self.choice.checkedButton() is None:
+            (self.here_radio if here else self.peer_radio).setChecked(True)
 
     def _go_to_preview(self) -> None:
         self.direction = Direction.PULL if self.peer_radio.isChecked() else Direction.PUSH
@@ -130,12 +188,17 @@ class SyncDialog(Dialog):
         self.start_button.setEnabled(False)
         self.start_button.show()
         node, world, direction = self.node, self.world, self.direction
-        saves_dir, remote = self.saves_dir, self.remote_instance
+        saves_dir, remote, local = self.saves_dir, self.remote_instance, self.local_instance
 
         def work(task: Task) -> SyncPreview:
             with _peer_client(node, remote) as client:
-                return prepare_sync(client, world, direction, saves_dir, staging_root(saves_dir),
-                                    node.settings.full_backup)
+                last_sync = last_sync_state(client, world, node.sync_states.load(local, world))
+                preview = prepare_sync(client, world, direction, saves_dir, staging_root(saves_dir),
+                                       node.settings.full_backup, last_sync)
+            if preview.here and not preview.plan.has_changes and not preview.check.blockers:
+                # Миры и так одинаковы: запоминаем это как состояние после синхронизации.
+                node.sync_states.save(local, world, preview.here)
+            return preview
 
         # Если пользователь успел вернуться назад и выбрать заново, ответ старого
         # сравнения нужно выбросить: показываем только результат последнего.
@@ -262,6 +325,8 @@ class SyncDialog(Dialog):
                     node.settings.keep_backups, task.report_progress, task.is_cancelled,
                     full_backup=node.settings.full_backup,
                 )
+            # Теперь мир здесь такой же, как там: запоминаем, каким он стал (для подсказки в следующий раз).
+            node.sync_states.save(local, world, build_manifest(saves_dir / world))
             if result.copied_files or result.deleted_files:
                 add_record(node.paths.history_file, new_record(
                     display_name, HistoryDirection.RECEIVED, peer,
@@ -320,6 +385,10 @@ class SyncDialog(Dialog):
             copied=format_count(result.copied_files, "word.files"), size=format_size(result.bytes_copied),
             deleted=format_count(result.deleted_files, "word.files"),
         )
+        sent = result.bytes_transferred
+        if sent is not None and sent < result.bytes_copied * COMPRESSION_NOTICE_RATIO:
+            saved = round((1 - sent / result.bytes_copied) * 100)
+            text += "\n" + tr("sync.compressed", sent=format_size(sent), percent=saved)
         if result.backup_path is not None:
             text += "\n\n" + tr("sync.backup_saved", path=result.backup_path)
         elif result.copied_files or result.deleted_files:
