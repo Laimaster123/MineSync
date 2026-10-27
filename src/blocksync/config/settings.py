@@ -71,12 +71,28 @@ def new_settings() -> Settings:
 
 def load_settings(path: Path) -> Settings:
     """Прочитать настройки. Если файла нет — создать новые (с новым ID) и сохранить."""
+    return read_settings(path)[0]
+
+
+def read_settings(path: Path) -> tuple[Settings, Path | None]:
+    """Прочитать настройки; второе значение — куда отложен повреждённый файл (или None).
+
+    Повреждённый файл (например, его испортили вручную) не должен мешать запуску:
+    он переименовывается в settings.broken.json, а программа начинает с новых настроек.
+    """
     if not path.exists():
         settings = new_settings()
         save_settings(settings, path)
-        return settings
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return _from_json(data)
+        return settings, None
+    try:
+        return _from_json(json.loads(path.read_text(encoding="utf-8"))), None
+    except (ValueError, KeyError, TypeError, AttributeError) as error:
+        broken = path.with_name(f"{path.stem}.broken{path.suffix}")
+        logger.error("Файл настроек %s повреждён (%s), он сохранён как %s", path, error, broken)
+        os.replace(path, broken)
+        settings = new_settings()
+        save_settings(settings, path)
+        return settings, broken
 
 
 def save_settings(settings: Settings, path: Path) -> None:

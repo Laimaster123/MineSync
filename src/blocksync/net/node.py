@@ -12,7 +12,7 @@ from pathlib import Path
 from blocksync.config.app_lock import AppLock
 from blocksync.config.instances import Instance, instance_from_saves, make_instance
 from blocksync.config.paths import AppPaths, default_saves_dir
-from blocksync.config.settings import PairedDevice, Settings, load_settings, save_settings
+from blocksync.config.settings import PairedDevice, Settings, read_settings, save_settings
 from blocksync.core.backups import validate_keep
 from blocksync.core.staging import cleanup_leftovers
 from blocksync.net.auth import RequestVerifier
@@ -54,7 +54,10 @@ class Node:
         self.on_change = on_change
         self.on_sync_request = on_sync_request
         self._settings_lock = threading.Lock()
-        self.settings: Settings = load_settings(paths.settings_file)
+        settings, broken = read_settings(paths.settings_file)
+        self.settings: Settings = settings
+        # Если файл настроек был повреждён — куда он отложен (интерфейс сообщит об этом).
+        self.broken_settings: Path | None = broken
         self._migrate_saves_dir()
 
         cert_path, key_path = ensure_certificate(paths.tls_dir, self.settings.device_id)

@@ -44,6 +44,10 @@ logger = logging.getLogger(__name__)
 # Самый большой допустимый размер тела запроса (у нас только короткий JSON).
 MAX_BODY_BYTES = 64 * 1024
 
+# Сколько ждать данных от клиента (секунды). Без этого соединение, которое
+# открыли и молчат, навсегда заняло бы поток сервера.
+SOCKET_TIMEOUT_SECONDS = 60
+
 # Регулярные выражения для разбора адреса: (?P<world>...) — именованная часть.
 _MANIFEST_RE = re.compile(rf"^{WORLDS_PATH}/(?P<world>[^/]+)/manifest$")
 _FILE_RE = re.compile(rf"^{WORLDS_PATH}/(?P<world>[^/]+)/files/(?P<path>.+)$")
@@ -183,6 +187,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     server: _HttpServer
     protocol_version = "HTTP/1.1"
+    timeout = SOCKET_TIMEOUT_SECONDS
 
     def do_GET(self) -> None:
         self._handle("GET")
@@ -215,7 +220,14 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(error.status, {"error": str(error)})
 
     def _read_body(self) -> bytes:
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if length < 0:
+            # read(-1) читал бы до закрытия соединения — сколько угодно данных.
+            self.close_connection = True
+            raise RequestError(HTTPStatus.BAD_REQUEST, "неверная длина запроса")
         if length > MAX_BODY_BYTES:
             # Тело не прочитано, поэтому это соединение дальше использовать нельзя.
             self.close_connection = True

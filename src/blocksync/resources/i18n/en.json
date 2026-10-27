@@ -180,5 +180,6 @@
   "backups.kind_full": "whole world",
   "backups.confirm_restore_delta": "Undo the sync of the world «{world}»?\nThe old versions of the files it replaced or deleted will come back. If you have played in this world since, only those files will be restored — it's best to undo right away.\nThe current versions will be backed up too.",
   "main.synced_at": "synced {time}",
-  "main.version": "Version {version}"
+  "main.version": "Version {version}",
+  "error.settings_broken": "The settings file was damaged, so MineSync started with new settings. The old file was saved here:\n{path}\n\nPairing and instances will need to be set up again."
 }

@@ -42,6 +42,8 @@ def main() -> int:
 
     window = MainWindow(node, bridge)
     window.show()
+    if node.broken_settings is not None:
+        QMessageBox.warning(window, "MineSync", tr("error.settings_broken", path=node.broken_settings))
     try:
         # exec() работает, пока окно не закрыто, и возвращает код завершения.
         return app.exec()

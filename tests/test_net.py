@@ -5,6 +5,7 @@
 """
 
 import os
+import socket
 import sys
 import threading
 import unicodedata
@@ -251,3 +252,19 @@ def test_server_rejects_symlink_outside_world(devices: Devices) -> None:
     os.symlink(secret, devices.pc_saves / "Мой мир" / "link.dat")
     with pytest.raises(RequestError):
         devices.server.world_file("Мой мир", "link.dat")
+
+
+@pytest.mark.parametrize("length", ["-1", "abc"])
+def test_bad_content_length_is_rejected(devices: Devices, length: str) -> None:
+    """Неверная длина тела — сразу ошибка 400, а не чтение «до конца соединения»."""
+    with socket.create_connection(("127.0.0.1", devices.server.port), timeout=5) as connection:
+        connection.sendall(f"POST /api/v1/pair/start HTTP/1.1\r\nHost: x\r\nContent-Length: {length}\r\n\r\n".encode())
+        connection.sendall(b"A" * 100_000)
+        assert connection.recv(64).startswith(b"HTTP/1.1 400")
+
+
+def test_silent_connection_is_closed(devices: Devices, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Соединение, по которому ничего не присылают, сервер закрывает сам."""
+    monkeypatch.setattr(server_module._Handler, "timeout", 0.3)
+    with socket.create_connection(("127.0.0.1", devices.server.port), timeout=5) as connection:
+        assert connection.recv(64) == b""  # сервер закрыл соединение

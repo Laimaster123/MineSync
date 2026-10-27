@@ -372,8 +372,9 @@ def test_instances_link_recent_and_language(devices: tuple[Device, Device], qtbo
 
     window.link_instance(vanilla.id, pc.instance_id)
     # Связь запомнили оба компьютера.
+    # ПК запоминает связь, как только получает запрос, а Мак — после ответа ПК: ждём обоих.
     qtbot.waitUntil(lambda: pc.node.linked_instance(pc.instance_id) == vanilla.id, timeout=TIMEOUT_MS)
-    assert mac.node.linked_instance(vanilla.id) == pc.instance_id
+    qtbot.waitUntil(lambda: mac.node.linked_instance(vanilla.id) == pc.instance_id, timeout=TIMEOUT_MS)
     wait_for_rows(qtbot, window, lambda rows: {r.folder_name: r.status for r in rows} == {
         "Выживание": WorldStatus.ONLY_HERE, "TEST": WorldStatus.ONLY_THERE,
     })
