@@ -384,5 +384,5 @@ def _buttons(*buttons: QPushButton) -> QHBoxLayout:
 def _peer_client(node: Node, instance: str | None) -> PeerClient:
     client = node.peer_client(instance)
     if client is None:
-        raise NetworkError(tr("error.peer_offline"))
+        raise NetworkError("другое устройство не в сети", "net_offline")
     return client

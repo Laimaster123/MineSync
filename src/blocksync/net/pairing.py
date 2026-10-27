@@ -48,11 +48,22 @@ _ID_HOST = b"blocksync-host"
 
 
 class PairingError(Exception):
-    """Сопряжение не удалось. status — HTTP-код для ответа гостю."""
+    """Сопряжение не удалось. status — HTTP-код для ответа гостю.
 
-    def __init__(self, message: str, status: HTTPStatus = HTTPStatus.BAD_REQUEST) -> None:
+    code и params — как у NetworkError: по ним интерфейс покажет текст на нужном языке
+    (ключ error.pair_<code>). Хозяин передаёт их гостю вместе с ошибкой.
+    """
+
+    def __init__(
+        self, message: str, status: HTTPStatus = HTTPStatus.BAD_REQUEST, code: str | None = None, **params: object
+    ) -> None:
         super().__init__(message)
         self.status = status
+        self.code = code
+        self.params = params
+
+    def to_json(self) -> dict[str, Any]:
+        return {"error": str(self), "code": self.code, "params": self.params}
 
 
 @dataclass
@@ -138,16 +149,20 @@ class PairingHost:
         with self._lock:
             code = self._active_code()
             if code is None:
-                raise PairingError("на устройстве нет активного кода сопряжения", HTTPStatus.CONFLICT)
+                raise PairingError("на устройстве нет активного кода сопряжения", HTTPStatus.CONFLICT, "pair_no_code")
             spake = SPAKE2_B(code.encode(), idA=_ID_GUEST, idB=_ID_HOST)
             host_msg = spake.start()
             try:
                 spake_key = spake.finish(bytes.fromhex(guest_msg))
             except Exception:
-                raise PairingError("повреждённое сообщение сопряжения") from None
+                raise PairingError("повреждённое сообщение сопряжения", code="pair_bad_message") from None
             transcript = _transcript(guest_id, self.device_id, bytes.fromhex(guest_msg), host_msg)
             if guest_id not in self._pending and len(self._pending) >= MAX_PENDING:
-                raise PairingError("слишком много попыток сопряжения", HTTPStatus.TOO_MANY_REQUESTS)
+                # Забываем самую старую незавершённую попытку. Если бы мы отказывали новым,
+                # чужое устройство в сети могло бы занять все места и не дать сопрячься.
+                # Подбирать код это не помогает: попытки считаются при подтверждении.
+                del self._pending[next(iter(self._pending))]
+            self._pending.pop(guest_id, None)  # новая попытка того же гостя — в конец очереди
             self._pending[guest_id] = _Pending(guest_name, transcript, _derive_keys(spake_key, transcript))
         return {"device_id": self.device_id, "name": self.device_name, "msg": host_msg.hex()}
 
@@ -156,17 +171,20 @@ class PairingHost:
         guest_id, guest_cert, guest_mac = _require(data, "device_id", "cert", "mac")
         with self._lock:
             if self._active_code() is None:
-                raise PairingError("код сопряжения устарел", HTTPStatus.GONE)
+                raise PairingError("код сопряжения устарел", HTTPStatus.GONE, "pair_expired")
             pending = self._pending.pop(guest_id, None)
             if pending is None:
-                raise PairingError("сопряжение не начато", HTTPStatus.CONFLICT)
+                raise PairingError("сопряжение не начато", HTTPStatus.CONFLICT, "pair_not_started")
             expected = _mac(pending.keys.confirm, b"guest", pending.transcript, guest_cert)
             if not hmac.compare_digest(expected, guest_mac):
                 self._attempts_left -= 1
                 left = self._attempts_left
                 if left <= 0:
                     self._invalidate()
-                raise PairingError(f"неверный код, осталось попыток: {max(left, 0)}", HTTPStatus.FORBIDDEN)
+                raise PairingError(
+                    f"неверный код, осталось попыток: {max(left, 0)}", HTTPStatus.FORBIDDEN, "pair_wrong_code",
+                    left=max(left, 0),
+                )
             self._invalidate()  # код одноразовый
 
         paired = PairedDevice(guest_id, pending.guest_name, pending.keys.shared, guest_cert)
@@ -195,7 +213,7 @@ def pair_with(base_url: str, code: str, device_id: str, device_name: str, cert_p
         try:
             spake_key = spake.finish(bytes.fromhex(host_msg_hex))
         except Exception:
-            raise PairingError("повреждённый ответ при сопряжении") from None
+            raise PairingError("повреждённый ответ при сопряжении", code="pair_bad_message") from None
         transcript = _transcript(device_id, host_id, guest_msg, bytes.fromhex(host_msg_hex))
         keys = _derive_keys(spake_key, transcript)
 
@@ -204,7 +222,7 @@ def pair_with(base_url: str, code: str, device_id: str, device_name: str, cert_p
         host_cert, host_mac = _require(reply, "cert", "mac")
 
     if not hmac.compare_digest(_mac(keys.confirm, b"host", transcript, host_cert), host_mac):
-        raise PairingError("другое устройство не подтвердило код — возможна подмена в сети")
+        raise PairingError("другое устройство не подтвердило код — возможна подмена в сети", code="pair_not_confirmed")
     return PairedDevice(host_id, host_name, keys.shared, host_cert)
 
 
@@ -212,10 +230,15 @@ def _post(http: httpx.Client, path: str, payload: dict[str, Any]) -> dict[str, A
     try:
         response = http.post(path, json=payload)
     except httpx.HTTPError as error:
-        raise NetworkError(f"не удалось связаться с устройством ({error.__class__.__name__})") from error
+        raise NetworkError(f"не удалось связаться с устройством ({error.__class__.__name__})", "net_connect") from error
     data = response.json() if response.headers.get("Content-Type", "").startswith("application/json") else {}
     if response.status_code != 200:
-        raise PairingError(data.get("error", f"ошибка {response.status_code}"), HTTPStatus(response.status_code))
+        code = data.get("code")
+        params = data.get("params")
+        raise PairingError(
+            data.get("error", f"ошибка {response.status_code}"), HTTPStatus(response.status_code),
+            code if isinstance(code, str) else None, **(params if isinstance(params, dict) else {}),
+        )
     return data
 
 
@@ -224,7 +247,7 @@ def _require(data: dict[str, Any], *keys: str) -> list[str]:
     try:
         values = [data[key] for key in keys]
     except (KeyError, TypeError):
-        raise PairingError("неполное сообщение сопряжения") from None
+        raise PairingError("неполное сообщение сопряжения", code="pair_bad_message") from None
     if not all(isinstance(value, str) for value in values):
-        raise PairingError("неверный формат сообщения сопряжения")
+        raise PairingError("неверный формат сообщения сопряжения", code="pair_bad_message")
     return values

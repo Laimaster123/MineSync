@@ -8,7 +8,7 @@ from blocksync.core.lock import WorldLockedError
 from blocksync.net.client import NetworkError
 from blocksync.net.pairing import PairingError
 from blocksync.ui.format import format_size
-from blocksync.ui.strings import tr
+from blocksync.ui.strings import has_text, tr
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,11 @@ def describe_error(error: BaseException) -> str:
         )
     if isinstance(error, (NetworkError, PairingError, SyncError)):
         logger.warning("Ошибка: %s", error)
+        # Текст на языке интерфейса по виду ошибки; если вид неизвестен (например, ошибку
+        # прислала старая версия программы) — исходный текст ошибки.
+        key = f"error.{error.code}" if error.code else None
+        if key is not None and has_text(key):
+            return tr(key, **error.params)
         return _sentence(str(error))
     if isinstance(error, OSError):
         logger.warning("Ошибка файла", exc_info=error)

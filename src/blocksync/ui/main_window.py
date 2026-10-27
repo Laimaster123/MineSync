@@ -81,11 +81,13 @@ class View:
     rows: list[WorldRow] = field(default_factory=list)
     icons: dict[str, bytes] = field(default_factory=dict)  # по WorldRow.key
     saves_missing: bool = False
-    peer_error: str | None = None
+    peer_error: NetworkError | None = None
     synced: dict[str, datetime] = field(default_factory=dict)  # когда мир синхронизирован, по WorldRow.key
 
 
-def _instance_rows(node: Node, instance: Instance) -> tuple[list[WorldRow], dict[str, bytes], bool, str | None]:
+def _instance_rows(
+    node: Node, instance: Instance
+) -> tuple[list[WorldRow], dict[str, bytes], bool, NetworkError | None]:
     """Миры одной сборки, сравнённые со связанной сборкой второго устройства."""
     remote = node.linked_instance(instance.id)
     client = node.peer_client(remote) if remote is not None else None
@@ -316,7 +318,7 @@ class MainWindow(QMainWindow):
         elif not view.rows:
             messages.append(tr("main.no_worlds"))
         if view.peer_error:
-            messages.append(tr("main.peer_error", error=view.peer_error))
+            messages.append(tr("main.peer_error", error=describe_error(view.peer_error)))
         self._show_message(messages)
         self._update_sync_button()
         self._watch(view)

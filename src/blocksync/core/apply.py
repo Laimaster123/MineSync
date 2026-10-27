@@ -54,7 +54,15 @@ class LocalFolderSource:
 
 
 class SyncError(Exception):
-    """Синхронизация не удалась, мир оставлен как был."""
+    """Синхронизация не удалась, мир оставлен как был.
+
+    code и params — для текста на языке интерфейса (как у net.client.NetworkError).
+    """
+
+    def __init__(self, message: str, code: str | None = None, **params: object) -> None:
+        super().__init__(message)
+        self.code = code
+        self.params = params
 
 
 class SyncCancelled(Exception):
@@ -174,7 +182,8 @@ class _Copier:
                     self.progress(self.done, self.total)
         if written != entry.size:
             raise SyncError(
-                f"размер файла {entry.path} не совпал: ожидалось {entry.size}, получено {written}"
+                f"размер файла {entry.path} не совпал: ожидалось {entry.size}, получено {written}",
+                "sync_size_mismatch", path=entry.path,
             )
         # Время изменения как у эталона, чтобы следующее сравнение не нашло лишних различий.
         os.utime(destination, ns=(entry.mtime_ns, entry.mtime_ns))

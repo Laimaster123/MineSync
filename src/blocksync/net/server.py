@@ -242,7 +242,9 @@ class _Handler(BaseHTTPRequestHandler):
         except AuthError as error:
             logger.warning("Отклонён запрос от %s: %s", self.address_string(), error)
             self._send_json(HTTPStatus.UNAUTHORIZED, {"error": str(error)})
-        except (RequestError, PairingError) as error:
+        except PairingError as error:
+            self._send_json(error.status, error.to_json())
+        except RequestError as error:
             self._send_json(error.status, {"error": str(error)})
 
     def _read_body(self) -> bytes:

@@ -33,6 +33,11 @@ def current_language() -> str:
     return _language
 
 
+def has_text(key: str) -> bool:
+    """Есть ли текст с таким ключом (хотя бы на русском)."""
+    return key in _strings(_language) or key in _strings("ru")
+
+
 def tr(key: str, **values: Any) -> str:
     """Текст по ключу; {name} в тексте заменяются значениями из values."""
     text = _strings(_language).get(key) or _strings("ru").get(key)
